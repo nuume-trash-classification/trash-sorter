@@ -1,0 +1,26 @@
+# Python / uv
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Generated data: never commit datasets, weights, renders
+data/
+runs/
+outputs/
+*.pt
+*.onnx
+*.engine
+*.mp4
+*.avi
+
+# Generated 3D assets (rebuild with sim/assets/*.py)
+sim/assets/usd/
+sim/assets/raw/
+!sim/assets/raw/README.md
+
+# Local settings
+.env
+local_settings.*
