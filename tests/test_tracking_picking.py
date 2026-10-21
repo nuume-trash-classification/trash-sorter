@@ -90,3 +90,14 @@ def test_low_confidence_objects_are_left_for_the_end_bin():
     tracker.update([det(0.015, 0.0, 0.1, conf=0.2)])
     ctrl.step(0.1, 1 / 60, tracker, False)
     assert ctrl.phase == Phase.IDLE
+
+
+def test_tracker_learns_per_object_velocity():
+    tr = BeltTracker()
+    vx, vy = 0.135, 0.01  # slower than the belt and drifting sideways (rolling bottle)
+    for k in range(30):
+        t = 0.1 * k
+        tr.update([det(-0.9 + vx * t, 0.0 + vy * t, t)])
+    [track] = tr.tracks
+    np.testing.assert_allclose(track.velocity, [vx, vy], atol=1e-6)
+    np.testing.assert_allclose(track.position_at(8.0)[:2], [-0.9 + vx * 8, vy * 8], atol=1e-6)

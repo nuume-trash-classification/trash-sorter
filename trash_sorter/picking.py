@@ -40,12 +40,14 @@ class ArmCommand:
 @dataclass
 class PickParams:
     max_speed: float = 1.0  # m/s, suction tip Cartesian speed
+    max_accel: float = 4.0  # m/s^2, smooth starts/stops so nothing gets thrown
     descend_speed: float = 0.35
     hover_height: float = 0.08  # above the object's top surface
     grip_clearance: float = 0.004  # tip height above the top surface when sucking
     grip_timeout: float = 0.6
     lift_z: float = 1.0
-    release_time: float = 0.35
+    release_settle: float = 0.15  # wait before opening the suction above the bin
+    release_time: float = 0.45
     min_confidence: float = 0.5
     min_hits: int = 2
     zone_x: tuple[float, float] = config.PICK_ZONE_X
@@ -72,6 +74,8 @@ class PickController:
     def __post_init__(self) -> None:
         self.phase = Phase.IDLE
         self.cmd = np.array(self.params.idle_position, dtype=np.float64)
+        self.vel = np.zeros(3)  # velocity of the commanded tip
+        self.lift_goal = self.cmd.copy()
         self.target: Track | None = None
         self.phase_t0 = 0.0
         self.gripper = GripperCommand.OPEN
@@ -83,18 +87,27 @@ class PickController:
         self.phase = phase
         self.phase_t0 = t
 
-    def _move_toward(self, goal: np.ndarray, dt: float, speed: float, feedforward: np.ndarray | None = None) -> bool:
-        """Move the commanded tip toward ``goal`` at <= speed. True when it has arrived."""
-        if feedforward is not None:
-            self.cmd = self.cmd + feedforward * dt
+    def _move_toward(self, goal: np.ndarray, dt: float, speed: float, goal_vel: np.ndarray | None = None) -> bool:
+        """Move the commanded tip toward ``goal`` (which moves at ``goal_vel``) with limited speed and
+        acceleration. Returns True once it has arrived and matches the goal velocity."""
+        p = self.params
+        gv = np.zeros(3) if goal_vel is None else goal_vel
         delta = goal - self.cmd
         dist = float(np.linalg.norm(delta))
-        step = speed * dt
-        if dist <= step:
+        # Braking profile: never faster than what still allows stopping at the goal.
+        v_mag = min(speed, float(np.sqrt(2.0 * p.max_accel * max(dist - 0.5 * p.position_tolerance, 0.0))))
+        v_des = gv + (delta / dist * v_mag if dist > 1e-9 else 0.0)
+        dv = v_des - self.vel
+        dv_norm = float(np.linalg.norm(dv))
+        if dv_norm > p.max_accel * dt:
+            dv *= p.max_accel * dt / dv_norm
+        self.vel = self.vel + dv
+        self.cmd = self.cmd + self.vel * dt
+        settled = float(np.linalg.norm(self.vel - gv)) < 0.05
+        if dist < 1e-3 and settled:
             self.cmd = goal.copy()
-            return True
-        self.cmd = self.cmd + delta * (step / dist)
-        return dist - step <= self.params.position_tolerance
+            self.vel = gv.copy()
+        return float(np.linalg.norm(goal - self.cmd)) <= p.position_tolerance and settled
 
     def _belt_velocity(self) -> np.ndarray:
         return np.array([self.params.belt_speed, 0.0, 0.0])
@@ -156,6 +169,7 @@ class PickController:
             # Follow the object in XY exactly, descend in Z at a limited speed.
             self.cmd[:2] = goal[:2]
             self.cmd[2] = max(goal[2], self.cmd[2] - p.descend_speed * dt)
+            self.vel = self._belt_velocity()
             if self.cmd[2] <= goal[2] + 1e-6:
                 self.gripper = GripperCommand.CLOSE
                 self._set_phase(Phase.GRIP, t)
@@ -163,32 +177,34 @@ class PickController:
         elif self.phase == Phase.GRIP and tr is not None:
             obj = tr.position_at(t, p.belt_speed)
             self.cmd = np.array([obj[0], obj[1], obj[2] + p.grip_clearance])
+            self.vel = self._belt_velocity()
             self.gripper = GripperCommand.CLOSE
             if holding:
                 self.events.append(PickEvent(t, "grasp", tr.track_id, tr.class_name, self.bin_name))
                 tr.done = True
-                self._set_phase(Phase.LIFT, t)
+                self._start_lift(t)
             elif t - self.phase_t0 > p.grip_timeout:
                 self.events.append(PickEvent(t, "grasp_failed", tr.track_id, tr.class_name, self.bin_name))
                 tr.done = True
                 self.gripper = GripperCommand.OPEN
                 self.target = None
-                self._set_phase(Phase.LIFT, t)
+                self._start_lift(t)
 
         elif self.phase == Phase.LIFT:
-            goal = np.array([self.cmd[0], self.cmd[1], p.lift_z])
-            ff = self._belt_velocity() if t - self.phase_t0 < 0.15 else None
-            if self._move_toward(goal, dt, p.max_speed * 0.6, ff):
+            # Straight up (keeping a little belt motion so the object is not dragged); start the
+            # transport move as soon as it is high enough.
+            self._move_toward(self.lift_goal, dt, p.max_speed * 0.6)
+            if self.cmd[2] >= p.lift_z - 0.03:
                 self._set_phase(Phase.TRANSPORT if self.target is not None else Phase.IDLE, t)
 
         elif self.phase == Phase.TRANSPORT:
-            bx, by = config.BIN_CENTERS[self.bin_name or config.CLASS_NAMES[0]]
-            if self._move_toward(np.array([bx, by, config.DROP_HEIGHT]), dt, p.max_speed):
-                self.gripper = GripperCommand.OPEN
+            if self._move_toward(self._bin_drop_point(), dt, p.max_speed):
                 self._set_phase(Phase.RELEASE, t)
 
         elif self.phase == Phase.RELEASE:
-            self.gripper = GripperCommand.OPEN
+            self._move_toward(self._bin_drop_point(), dt, p.max_speed)
+            if t - self.phase_t0 >= p.release_settle:  # let the arm come to rest, then drop
+                self.gripper = GripperCommand.OPEN
             if t - self.phase_t0 >= p.release_time:
                 assert self.target is not None
                 self.events.append(PickEvent(t, "release", self.target.track_id, self.target.class_name, self.bin_name))
@@ -196,6 +212,15 @@ class PickController:
                 self._set_phase(Phase.IDLE, t)
 
         return ArmCommand(self.cmd.copy(), self.gripper)
+
+    def _start_lift(self, t: float) -> None:
+        p = self.params
+        self.lift_goal = np.array([self.cmd[0] + p.belt_speed * 0.2, self.cmd[1], p.lift_z])
+        self._set_phase(Phase.LIFT, t)
+
+    def _bin_drop_point(self) -> np.ndarray:
+        bx, by = config.BIN_CENTERS[self.bin_name or config.CLASS_NAMES[0]]
+        return np.array([bx, by, config.DROP_HEIGHT])
 
     def _abandon(self, t: float) -> None:
         assert self.target is not None

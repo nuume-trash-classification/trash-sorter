@@ -54,7 +54,7 @@ SPAWN_Y_RANGE = (-0.12, 0.12)
 # ---------------------------------------------------------------------------
 # Top-down RGB camera, upstream of the arm
 # ---------------------------------------------------------------------------
-CAMERA_X = -0.75
+CAMERA_X = -0.50
 CAMERA_HEIGHT = 0.70  # above the belt surface
 CAMERA_RESOLUTION = (640, 480)  # (width, height)
 CAMERA_FOCAL_MM = 18.0
