@@ -37,7 +37,7 @@ flowchart LR
 | 3D 模型 | 程式產生的圓柱 / 方塊（每類 6 種） | 網路模型 + 手機掃描（工作流 1） |
 | 訓練資料 | 用替代模型產生的合成影像 | 用真實模型重新產生（工作流 2） |
 | 真實照片 / 標註 | 沒有 | 300 張測試 + 50–100 張微調（工作流 3） |
-| YOLO 權重 | 在替代模型上訓練幾個 epoch 的示範權重 | 正式訓練（工作流 2） |
+| YOLO 權重 | 不進 git；照「快速開始」第 3–4 步自己產生（約 15 分鐘） | 用真實模型的資料正式訓練（工作流 2） |
 
 v1 驗證結果請看本頁最下面「[驗證紀錄](#v1-驗證紀錄)」。
 
@@ -84,8 +84,10 @@ trash-sorter/
    `--perception yolo` 需要在 Isaac Sim 的 venv 裡加裝 ultralytics（不要動到它的 torch / opencv）：
 
    ```bat
-   %ISAACSIM_PYTHON% -m pip install --no-deps ultralytics ultralytics-thop polars
+   %ISAACSIM_PYTHON% -m pip install --no-deps ultralytics ultralytics-thop polars polars-runtime-32
    ```
+
+   Isaac Sim venv 裡的 torchvision 是 CPU 版，所以模擬中的 YOLO 會自動改用 CPU 推論（nano 模型夠快）。
 
 2. **訓練 / 評估 / demo 的 uv 環境**（會裝 CUDA 版 torch，約 3 GB）：
 
@@ -209,4 +211,23 @@ uv run python perception/live_demo.py --weights runs\segment\sim_only\weights\be
 
 ## v1 驗證紀錄
 
-（見下方，由 v1 建置時實際執行的結果）
+2026-10-22 在 RTX 4080 SUPER 上實際執行。**全部用替代資產**，數字只代表「流程可以跑通」，不代表真實表現。
+
+| 驗證 | 結果 |
+|---|---|
+| 單元測試 `uv run pytest` | 64 passed |
+| `ruff check` / `ruff format` | 通過 |
+| `run_sorter.py --perception gt --headless --duration 300` | 70 個物體：**取物成功率 90.0%（63/70）**、漏撿率 10.0%、分類正確率 100%、掉落 0 |
+| `datagen.py --frames 1500` | 約 5 分鐘；每類約 860–910 個實例；抽查疊圖，標籤貼合物體邊緣 |
+| `train.py`（yolo26n-seg，40 epoch） | 合成驗證集 mask mAP50 = 0.993（同領域，**不是**真實照片成績） |
+| `run_sorter.py --perception yolo --headless --duration 300` | 69 個物體：**取物成功率 74.6%（53/71）**、漏撿率 23.2%、分類正確率 94.3% |
+| `live_demo.py` | webcam 0 與影片檔都能跑；有遮罩、類別、吸取點 |
+
+已知問題（v1）：
+
+- **YOLO 模式的失敗全部是瓶子**（寶特瓶、玻璃瓶），罐子和紙盒幾乎全部成功。
+  瓶身吸取點偶爾偏 1–3 cm（替代模型是透明圓柱，遮罩有時連陰影一起包進去），吸盤就吸不到。
+  換成真實模型 + 更好的資料後要再量；也可以考慮吸取失敗後重試、或對瓶子用遮罩主軸來定位。
+- 寶特瓶和玻璃瓶的替代模型長得很像，偶爾分類搖擺，平均信心低於 0.5 的 track 不會被撿（進末端桶）。
+- 在模擬中跑 300 秒約需 10–14 分鐘（headless，含 RTX 渲染）。
+- `--perception gt` 會讀模擬真值，**只能用來開發手臂**，不能當成果。
