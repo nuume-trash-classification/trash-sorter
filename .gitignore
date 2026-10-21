@@ -24,3 +24,5 @@ sim/assets/raw/
 # Local settings
 .env
 local_settings.*
+uv_ml.log
+*.log

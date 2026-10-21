@@ -202,26 +202,26 @@ def _camera() -> RtxCamera:
     for sy in (-config.BELT_WIDTH / 2 - 0.08, config.BELT_WIDTH / 2 + 0.08):
         box(
             f"/World/CameraGantry/Post_{'L' if sy < 0 else 'R'}",
-            (config.CAMERA_X - 0.45, sy, (cam_z + 0.03) / 2),
-            (0.04, 0.04, cam_z + 0.03),
+            (config.CAMERA_X - 0.45, sy, (cam_z + 0.09) / 2),
+            (0.04, 0.04, cam_z + 0.09),
             gantry,
             collide=False,
         )
     box(
         "/World/CameraGantry/Arm",
-        (config.CAMERA_X - 0.225, 0, cam_z + 0.05),
+        (config.CAMERA_X - 0.225, 0, cam_z + 0.11),
         (0.45, 0.04, 0.03),
         gantry,
         collide=False,
     )
     box(
         "/World/CameraGantry/Top",
-        (config.CAMERA_X - 0.45, 0, cam_z + 0.05),
+        (config.CAMERA_X - 0.45, 0, cam_z + 0.11),
         (0.04, config.BELT_WIDTH + 0.2, 0.03),
         gantry,
         collide=False,
     )
-    box("/World/CameraGantry/CameraBody", (config.CAMERA_X, 0, cam_z + 0.025), (0.06, 0.06, 0.04), (0.08,) * 3, False)
+    box("/World/CameraGantry/CameraBody", (config.CAMERA_X, 0, cam_z + 0.075), (0.06, 0.06, 0.04), (0.08,) * 3, False)
     del stage
     cam = RtxCamera(CAMERA_PATH, positions=[[config.CAMERA_X, 0.0, cam_z]], orientations=[[1.0, 0.0, 0.0, 0.0]])
     cam.camera.set_focal_lengths(config.CAMERA_FOCAL_MM)
@@ -338,7 +338,7 @@ def look_at_quat(eye, target) -> list[float]:
 
 
 def add_overview_camera() -> RtxCamera:
-    eye, target = (1.9, -2.2, 2.0), (0.0, 0.0, 0.6)
+    eye, target = (1.6, 2.4, 2.1), (0.05, -0.05, 0.6)
     cam = RtxCamera(OVERVIEW_CAMERA_PATH, positions=[list(eye)], orientations=[look_at_quat(eye, target)])
     cam.camera.set_focal_lengths(18.0)
     cam.camera.set_apertures(horizontal_apertures=20.955, vertical_apertures=11.787)

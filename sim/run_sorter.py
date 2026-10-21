@@ -53,7 +53,7 @@ from isaacsim.sensors.experimental.rtx import CameraSensor
 
 from sim.assets.library import describe, find_assets
 from sim.gt_perception import GroundTruthPerception
-from sim.scene import GRIPPER_PATH, ROBOT_PATH, add_overview_camera, build_scene
+from sim.scene import GRIPPER_PATH, OVERVIEW_CAMERA_PATH, ROBOT_PATH, add_overview_camera, build_scene
 from trash_sorter import config
 from trash_sorter.geometry import default_camera
 from trash_sorter.metrics import END_BIN, LOST, SortingStats
@@ -74,17 +74,14 @@ scene = build_scene(assets, per_class=6)
 sensor = CameraSensor(
     scene.camera, resolution=(config.CAMERA_RESOLUTION[1], config.CAMERA_RESOLUTION[0]), annotators=["rgb"]
 )
-overview = None
-if args.snapshots > 0:
-    ov_cam = add_overview_camera()
-    overview = CameraSensor(ov_cam, resolution=(720, 1280), annotators=["rgb"])
+overview_cam = add_overview_camera()
+overview = CameraSensor(overview_cam, resolution=(720, 1280), annotators=["rgb"]) if args.snapshots > 0 else None
 if not args.headless:
     try:
         from omni.kit.viewport.utility import get_active_viewport
 
-        add_overview_camera() if overview is None else None
-        get_active_viewport().camera_path = "/World/OverviewCamera"
-    except Exception as exc:
+        get_active_viewport().camera_path = OVERVIEW_CAMERA_PATH
+    except Exception as exc:  # a viewport problem must not stop the simulation
         print(f"[sorter] could not set viewport camera: {exc}")
 
 objects = scene.objects
