@@ -47,8 +47,20 @@ def test_pick_pixel_is_deepest_point_of_mask():
     mask[20:60, 30:150] = True  # rectangle: deepest points lie on the center row
     u, v = pick_pixel_from_mask(mask)
     assert 38 <= v <= 41
-    assert 49 <= u <= 130
+    assert 88 <= u <= 91  # middle of the ridge, not anywhere along it
     assert pick_pixel_from_mask(np.zeros((5, 5))) is None
+
+
+def test_pick_pixel_is_stable_on_a_bottle_shape():
+    """Body + narrow neck: the pick point sits mid-body and barely moves when the mask shifts by a pixel."""
+    pts = []
+    for shift in range(3):
+        mask = np.zeros((120, 300), bool)
+        mask[40:80, 20 + shift : 170 + shift] = True  # body
+        mask[52:68, 170 + shift : 230 + shift] = True  # neck
+        pts.append(pick_pixel_from_mask(mask))
+    assert all(40 < u < 170 for u, _ in pts)
+    assert max(u for u, _ in pts) - min(u for u, _ in pts) <= 3
 
 
 def test_pick_pixel_on_l_shape_stays_inside():

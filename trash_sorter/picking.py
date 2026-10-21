@@ -49,7 +49,8 @@ class PickParams:
     release_settle: float = 0.15  # wait before opening the suction above the bin
     release_time: float = 0.45
     min_confidence: float = 0.5
-    min_hits: int = 2
+    min_hits: int = 3
+    duplicate_radius: float = 0.08  # other tracks this close to a picked one are the same object
     zone_x: tuple[float, float] = config.PICK_ZONE_X
     idle_position: tuple[float, float, float] = (0.15, 0.0, 0.95)
     position_tolerance: float = 0.01
@@ -182,6 +183,9 @@ class PickController:
             if holding:
                 self.events.append(PickEvent(t, "grasp", tr.track_id, tr.class_name, self.bin_name))
                 tr.done = True
+                for other in tracker.active():  # duplicate tracks of the object we now hold
+                    if float(np.linalg.norm(other.position_at(t, p.belt_speed)[:2] - obj[:2])) < p.duplicate_radius:
+                        other.done = True
                 self._start_lift(t)
             elif t - self.phase_t0 > p.grip_timeout:
                 self.events.append(PickEvent(t, "grasp_failed", tr.track_id, tr.class_name, self.bin_name))

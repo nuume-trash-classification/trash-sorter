@@ -63,3 +63,10 @@ def test_metrics_summary():
     assert out["miss_rate"] == 1 / 3
     assert out["sorting_accuracy"] == 0.5
     assert "pick success rate" in s.format()
+
+
+def test_detections_off_the_belt_are_dropped():
+    cam = default_camera()
+    masks = np.zeros((1, 480, 640), bool)
+    masks[5:40, 300:340] = True  # top of the image = far side, beyond the belt edge
+    assert masks_to_detections(masks, np.array([0]), np.array([0.9]), cam, t=0.0) == []

@@ -68,6 +68,8 @@ def masks_to_detections(
             pos = pick_point_world(camera, pixel, name)
         except ValueError:
             continue
+        if abs(pos[1]) > config.BELT_WIDTH / 2 + 0.02:  # not on the belt: background, bins, the arm...
+            continue
         dets.append(Detection(name, float(conf), pos, t, pixel, mask))
     return dets
 
@@ -98,7 +100,15 @@ class YoloPerception:
     def detect(self, rgb: np.ndarray, t: float) -> list[Detection]:
         """Run the model on an RGB uint8 image (H, W, 3)."""
         bgr = np.ascontiguousarray(rgb[..., :3][..., ::-1])  # ultralytics expects BGR numpy arrays
-        res = self.model.predict(bgr, conf=self.conf, imgsz=self.imgsz, device=self.device, verbose=False)[0]
+        try:
+            res = self.model.predict(bgr, conf=self.conf, imgsz=self.imgsz, device=self.device, verbose=False)[0]
+        except NotImplementedError as exc:
+            # Isaac Sim's venv ships a CPU-only torchvision (no CUDA NMS): fall back to CPU once.
+            if self.device == "cpu":
+                raise
+            print(f"[perception] GPU inference failed ({str(exc)[:60]}...), using CPU")
+            self.device = "cpu"
+            res = self.model.predict(bgr, conf=self.conf, imgsz=self.imgsz, device="cpu", verbose=False)[0]
         if res.masks is None or len(res.boxes) == 0:
             return []
         masks = res.masks.data.cpu().numpy() > 0.5

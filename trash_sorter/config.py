@@ -61,6 +61,9 @@ CAMERA_FOCAL_MM = 18.0
 CAMERA_H_APERTURE_MM = 20.955
 CAMERA_V_APERTURE_MM = CAMERA_H_APERTURE_MM * CAMERA_RESOLUTION[1] / CAMERA_RESOLUTION[0]
 CAMERA_PERIOD = 0.10  # seconds between perception frames
+# The image shows the belt a little earlier than the moment we read it (render pipeline delay;
+# a real camera has exposure + transfer delay too). Measured in sim: ~0.04 s. Calibrate on hardware.
+CAMERA_LATENCY = 0.04
 
 # ---------------------------------------------------------------------------
 # UR10 + suction

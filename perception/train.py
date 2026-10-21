@@ -24,7 +24,7 @@ from perception.common import RUNS_DIR, resolve_data
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", required=True, help="data.yaml or dataset folder")
-    ap.add_argument("--model", default="yolo11n-seg.pt", help="start weights: yolo11n-seg.pt / yolo11s-seg.pt / a .pt")
+    ap.add_argument("--model", default="yolo26n-seg.pt", help="start weights: yolo26n-seg.pt / yolo26s-seg.pt / a .pt")
     ap.add_argument("--name", default="sim_only")
     ap.add_argument("--epochs", type=int, default=60)
     ap.add_argument("--imgsz", type=int, default=640)

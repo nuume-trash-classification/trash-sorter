@@ -188,6 +188,28 @@ def score_objects(t: float) -> None:
         park(obj)
 
 
+det_errors: list[np.ndarray] = []
+
+
+def debug_detection_error(dets) -> None:
+    """Debug only: distance from each YOLO pick point to the nearest true object center (XY)."""
+    pos = view.get_world_poses()[0].numpy()
+    on_belt = [pos[o.index] for o in objects if o.state == "on_belt"]
+    for d in dets:
+        if on_belt:
+            near = min(on_belt, key=lambda p: np.linalg.norm(p[:2] - d.position[:2]))
+            if d.class_name in ("aluminum_can", "paper_carton"):  # symmetric: pick point = center
+                det_errors.append(d.position[:2] - near[:2])
+    if det_errors and len(det_errors) % 200 < len(dets):
+        e = np.array(det_errors)
+        n = np.linalg.norm(e, axis=1)
+        print(
+            f"[debug] detection-truth XY (cans/cartons): median |e| {np.median(n) * 100:.1f} cm, "
+            f"p90 {np.percentile(n, 90) * 100:.1f} cm, mean dx {e[:, 0].mean() * 100:+.1f} cm, "
+            f"mean dy {e[:, 1].mean() * 100:+.1f} cm, n={len(e)}"
+        )
+
+
 def save_camera_frame(rgb: np.ndarray, dets, t: float) -> None:
     img = cv2.cvtColor(np.ascontiguousarray(rgb[..., :3]), cv2.COLOR_RGB2BGR)
     for d in dets:
@@ -261,8 +283,12 @@ while simulation_app.is_running():
         if data is not None:
             next_frame = t + config.CAMERA_PERIOD
             rgb = data.numpy()
-            dets = perception.detect(rgb, t)
+            # Time stamp = when the image was taken, not when we read it.
+            t_image = t - (config.CAMERA_LATENCY if args.perception == "yolo" else 0.0)
+            dets = perception.detect(rgb, t_image)
             tracker.update(dets)
+            if args.debug and args.perception == "yolo":
+                debug_detection_error(dets)
             if args.save_camera and dets:
                 save_camera_frame(rgb, dets, t)
     tracker.prune(t)
@@ -289,8 +315,7 @@ while simulation_app.is_running():
     for ev in controller.events[n_events:]:
         if ev.kind == "grasp" and gripped:
             holding_path = gripped[0]
-            print(f"[sorter] gripped {gripped}")
-            aimed_bins[holding_path] = ev.bin_name
+            aimed_bins[holding_path] = ev.bin_name or ""
         elif ev.kind == "grasp_failed":
             stats.record_attempt(False)
             if args.debug:
@@ -309,6 +334,13 @@ while simulation_app.is_running():
         elif ev.kind == "release":
             holding_path = None
         print(f"[sorter] t={t:6.1f}s {ev.kind:<12} track={ev.track_id:<3} class={ev.class_name}")
+        if args.debug and ev.kind == "claim":
+            tr = next((x for x in tracker.tracks if x.track_id == ev.track_id), None)
+            if tr is not None:
+                print(
+                    f"[debug]   hits={tr.hits} conf={tr.confidence:.2f} v={tr.velocity} "
+                    f"obs_span={tr.observations[-1][0] - tr.observations[0][0]:.1f}s"
+                )
     n_events = len(controller.events)
     if gripper_state == GripperCommand.OPEN:
         holding_path = None

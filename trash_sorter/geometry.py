@@ -110,11 +110,15 @@ def default_camera(
     )
 
 
-def pick_pixel_from_mask(mask: np.ndarray) -> tuple[int, int] | None:
+def pick_pixel_from_mask(mask: np.ndarray, ridge: float = 0.9) -> tuple[int, int] | None:
     """Point inside the mask that is farthest from the mask edge (distance transform).
 
     Returns (u, v) = (column, row), or None for an empty mask. This is the flattest,
     most central spot of the object, which is where a suction cup seals best.
+
+    On elongated objects (bottles) the maximum is a whole ridge along the body, and a plain
+    argmax jumps along it from frame to frame. So we take the middle of all pixels within
+    ``ridge`` x max distance, then snap to the nearest such pixel (stays inside the mask).
     """
     m = (np.asarray(mask) > 0).astype(np.uint8)
     if not m.any():
@@ -122,8 +126,10 @@ def pick_pixel_from_mask(mask: np.ndarray) -> tuple[int, int] | None:
     # Pad so pixels on the image border count as "edge" too.
     padded = np.pad(m, 1)
     dist = cv2.distanceTransform(padded, cv2.DIST_L2, 5)[1:-1, 1:-1]
-    v, u = np.unravel_index(int(np.argmax(dist)), dist.shape)
-    return int(u), int(v)
+    vs, us = np.nonzero(dist >= ridge * dist.max())
+    cu, cv = us.mean(), vs.mean()
+    k = int(np.argmin((us - cu) ** 2 + (vs - cv) ** 2))
+    return int(us[k]), int(vs[k])
 
 
 def pick_point_world(

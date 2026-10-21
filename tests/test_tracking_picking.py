@@ -88,6 +88,7 @@ def test_low_confidence_objects_are_left_for_the_end_bin():
     ctrl = PickController()
     tracker.update([det(0.0, 0.0, 0.0, conf=0.2)])
     tracker.update([det(0.015, 0.0, 0.1, conf=0.2)])
+    tracker.update([det(0.030, 0.0, 0.2, conf=0.2)])
     ctrl.step(0.1, 1 / 60, tracker, False)
     assert ctrl.phase == Phase.IDLE
 

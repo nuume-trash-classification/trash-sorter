@@ -41,7 +41,7 @@ class Track:
         return p
 
     def add_observation(
-        self, t: float, position: np.ndarray, belt_speed: float, min_span: float = 0.5, window: float = 3.0
+        self, t: float, position: np.ndarray, belt_speed: float, min_span: float = 0.5, window: float = 6.0
     ) -> None:
         """Add a measurement and refit position + velocity (least squares over the last ``window`` s)."""
         self.observations.append((t, position.copy()))

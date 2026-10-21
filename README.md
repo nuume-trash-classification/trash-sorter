@@ -90,10 +90,10 @@ trash-sorter/
 2. **訓練 / 評估 / demo 的 uv 環境**（會裝 CUDA 版 torch，約 3 GB）：
 
    ```bat
-   uv sync --extra ml
+   uv sync
    ```
 
-   只跑單元測試的話 `uv sync` 就夠。
+   只跑單元測試、不想裝 torch 的話：`uv sync --no-group ml`。
 
 第一次跑模擬會從 NVIDIA 雲端下載 UR10 模型，需要網路。
 
@@ -157,7 +157,7 @@ uv run python perception/live_demo.py --weights runs\segment\sim_only\weights\be
 1. 工作流 1 有真實模型後，重新產生資料：`scripts\isaac.cmd sim\datagen.py --frames 5000 --name sim_v2`。
 2. 打開 `data/synthetic/<name>/preview/` 檢查標籤疊圖。
 3. 訓練：`uv run python perception/train.py --data data/synthetic/sim_v2 --name sim_only --epochs 80`
-   （可試 `--model yolo11s-seg.pt`）。
+   （可試 `--model yolo26s-seg.pt`）。
 4. 調整 domain randomization（`datagen.py` 的 `randomize()`）：看真實照片長什麼樣，往那個方向加變化。
 
 ### 工作流 3：真實照片與標註（`perception/prepare_real.py`、`perception/show_labels.py`）

@@ -6,16 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "numpy>=2.0",
-    "opencv-python-headless>=4.10",
+    "opencv-python>=4.10",  # with GUI: live_demo.py opens a window
     "pyyaml>=6.0",
-]
-
-[project.optional-dependencies]
-# Training / evaluation / live demo. Pulls CUDA torch from the PyTorch index (see [tool.uv.sources]).
-ml = [
-    "torch>=2.6",
-    "torchvision>=0.21",
-    "ultralytics>=8.3",
 ]
 
 [dependency-groups]
@@ -23,6 +15,16 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.6",
 ]
+# Training / evaluation / live demo. Pulls CUDA torch from the PyTorch index (see [tool.uv.sources]).
+# Installed by default; skip it with `uv sync --no-group ml` if you only run the tests.
+ml = [
+    "torch>=2.6",
+    "torchvision>=0.21",
+    "ultralytics>=8.3",
+]
+
+[tool.uv]
+default-groups = ["dev", "ml"]
 
 [build-system]
 requires = ["uv_build>=0.12.20,<0.13.0"]

@@ -245,6 +245,10 @@ def _robot(assets_root: str) -> None:
     xf = UsdGeom.Xformable(stage.GetPrimAtPath(ROBOT_PATH))
     xf.ClearXformOpOrder()
     xf.AddTranslateOp().Set(Gf.Vec3d(bx, by, bz))
+    # The asset has a flashlight on the wrist; it blows out the sorter camera image. Turn it off.
+    lights = stage.GetPrimAtPath(ROBOT_PATH + "/ee_link/Lights")
+    if lights.IsValid():
+        lights.SetActive(False)
     # Suction settings: reach a bit further than the 2 cm default, hold up to ~5 kg.
     grip = stage.GetPrimAtPath(GRIPPER_PATH)
     grip.GetAttribute("isaac:maxGripDistance").Set(0.03)
