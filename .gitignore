@@ -18,7 +18,7 @@ outputs/
 
 # Generated 3D assets (rebuild with sim/assets/*.py)
 sim/assets/usd/
-sim/assets/raw/
+sim/assets/raw/*
 !sim/assets/raw/README.md
 
 # Local settings
