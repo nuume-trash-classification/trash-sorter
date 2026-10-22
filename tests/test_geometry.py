@@ -1,3 +1,4 @@
+import cv2
 import numpy as np
 import pytest
 
@@ -75,6 +76,37 @@ def test_pick_point_uses_class_thickness():
     cam = default_camera()
     p = pick_point_world(cam, (cam.cx, cam.cy), "aluminum_can")
     assert p[2] == pytest.approx(config.BELT_TOP_Z + config.CLASS_SPECS["aluminum_can"].thickness)
+
+
+def _cylinder_silhouette(cam: CameraModel, center: np.ndarray, axis: np.ndarray, radius: float, length: float):
+    """Mask of a lying cylinder as the camera sees it (top + the side facing the camera)."""
+    axis = axis / np.linalg.norm(axis)
+    side = np.cross(axis, [0.0, 0.0, 1.0])
+    pts = []
+    for s in np.linspace(-length / 2, length / 2, 40):
+        for a in np.linspace(0, 2 * np.pi, 72, endpoint=False):
+            pts.append(center + s * axis + radius * (np.cos(a) * side + np.sin(a) * np.array([0.0, 0.0, 1.0])))
+    px = np.array([cam.world_to_pixel(p) for p in pts], dtype=np.float32)
+    mask = np.zeros((cam.height, cam.width), np.uint8)
+    cv2.fillConvexPoly(mask, cv2.convexHull(px).astype(np.int32), 1)
+    return mask.astype(bool)
+
+
+@pytest.mark.parametrize("xy", [(-0.20, 0.15), (-0.80, -0.15), (-0.50, 0.0), (-0.30, -0.10)])
+@pytest.mark.parametrize("axis", [(1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.6, 0.8, 0.0)])
+def test_pick_point_is_above_the_true_axis_off_center(xy, axis):
+    """Perspective: the silhouette center is the object's middle, not its top. Regression for
+    bottles lying across the belt being missed by ~5% of their distance from the camera axis."""
+    cam = default_camera()
+    radius = config.CLASS_SPECS["pet_bottle"].thickness / 2
+    center = np.array([xy[0], xy[1], config.BELT_TOP_Z + radius])
+    mask = _cylinder_silhouette(cam, center, np.array(axis), radius, 0.20)
+    p = pick_point_world(cam, pick_pixel_from_mask(mask), "pet_bottle")
+    a2 = np.array(axis[:2]) / np.linalg.norm(axis[:2])
+    e = p[:2] - center[:2]
+    assert abs(e[0] * -a2[1] + e[1] * a2[0]) < 0.004  # across the axis: decides if suction seals
+    assert abs(e @ a2) < 0.015  # along the axis: still on the body
+    assert p[2] == pytest.approx(config.BELT_TOP_Z + 2 * radius)
 
 
 def test_motion_prediction():

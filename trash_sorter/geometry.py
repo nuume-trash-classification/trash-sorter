@@ -135,9 +135,18 @@ def pick_pixel_from_mask(mask: np.ndarray, ridge: float = 0.9) -> tuple[int, int
 def pick_point_world(
     camera: CameraModel, pixel: tuple[float, float], class_name: str, belt_top_z: float = config.BELT_TOP_Z
 ) -> np.ndarray:
-    """Pixel -> 3D pick point on the object's top surface (belt plane + known class thickness)."""
+    """Pixel -> 3D pick point on the object's top surface (belt plane + known class thickness).
+
+    The mask's center pixel looks at the object's *middle*, not its top: off the camera axis the
+    camera also sees one side, so the silhouette is centered on the object's mid-height. So the
+    ray is intersected at half the thickness (the object's center), and z is then set to the top.
+    Using the top plane instead shrinks positions toward the camera axis by ~5%, which also makes
+    the fitted belt velocity ~5% too slow and the arm lag behind the object.
+    """
     thickness = config.CLASS_SPECS[class_name].thickness
-    return camera.pixel_to_plane(pixel[0], pixel[1], belt_top_z + thickness)
+    p = camera.pixel_to_plane(pixel[0], pixel[1], belt_top_z + thickness / 2)
+    p[2] = belt_top_z + thickness
+    return p
 
 
 def predict_position(

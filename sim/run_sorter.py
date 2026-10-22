@@ -6,8 +6,9 @@
 ``--perception yolo`` (default) only uses camera images + belt speed, as on a real system.
 ``--perception gt`` reads object poses from the simulator: dev mode for arm work only.
 
-Ground truth is read by this script for one thing only: *scoring* (which bin each object
-ended in). The picking pipeline never sees it in yolo mode.
+Ground truth is read by this script only for *scoring* (which bin each object ended in) and,
+with ``--debug``, for logging pick-point errors to ``diag.json``. The picking pipeline never
+sees it in yolo mode.
 """
 
 from __future__ import annotations
@@ -30,7 +31,9 @@ ap.add_argument("--spawn-interval", type=float, default=4.0, help="mean seconds 
 ap.add_argument("--assets", choices=["auto", "real", "placeholder"], default="auto")
 ap.add_argument("--snapshots", type=float, default=0.0, help="save an overview image every N sim seconds")
 ap.add_argument("--save-camera", action="store_true", help="save every perception frame with detections drawn")
-ap.add_argument("--debug", action="store_true", help="print extra info on failed grasps")
+ap.add_argument(
+    "--debug", action="store_true", help="print extra info and write pick-point errors vs ground truth to diag.json"
+)
 ap.add_argument("--out", default=None, help="output folder (default outputs/run_<time>)")
 args = ap.parse_args()
 if args.perception == "yolo" and not args.weights:
@@ -55,9 +58,9 @@ from sim.assets.library import describe, find_assets
 from sim.gt_perception import GroundTruthPerception
 from sim.scene import GRIPPER_PATH, OVERVIEW_CAMERA_PATH, ROBOT_PATH, add_overview_camera, build_scene
 from trash_sorter import config
-from trash_sorter.geometry import default_camera
+from trash_sorter.geometry import default_camera, quat_wxyz_to_matrix
 from trash_sorter.metrics import END_BIN, LOST, SortingStats
-from trash_sorter.picking import GripperCommand, PickController, PickParams
+from trash_sorter.picking import GripperCommand, Phase, PickController, PickParams
 from trash_sorter.tracking import BeltTracker
 from trash_sorter.ur10 import HOME_Q, Ur10Kinematics
 
@@ -188,26 +191,83 @@ def score_objects(t: float) -> None:
         park(obj)
 
 
-det_errors: list[np.ndarray] = []
+diag: dict[str, list] = {"detections": [], "grips": []}  # --debug only, written to diag.json
 
 
-def debug_detection_error(dets) -> None:
-    """Debug only: distance from each YOLO pick point to the nearest true object center (XY)."""
-    pos = view.get_world_poses()[0].numpy()
-    on_belt = [pos[o.index] for o in objects if o.state == "on_belt"]
+def _true_frame(obj, pos: np.ndarray, quat: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Debug only: true center and long axis (asset local +X = toward the cap) of an object."""
+    axis = quat_wxyz_to_matrix(quat) @ np.array([1.0, 0.0, 0.0])
+    axis2 = axis[:2] / max(float(np.linalg.norm(axis[:2])), 1e-9)
+    return pos[obj.index], axis2
+
+
+def _error_in_object_frame(point_xy: np.ndarray, center_xy: np.ndarray, axis2: np.ndarray) -> tuple[float, float]:
+    """(along, across) offset of a point from the object center; along > 0 = toward the cap."""
+    e = point_xy - center_xy
+    return float(e @ axis2), float(e[0] * -axis2[1] + e[1] * axis2[0])
+
+
+def _nearest_on_belt(xy: np.ndarray, pos: np.ndarray):
+    return min(
+        (o for o in objects if o.state == "on_belt"),
+        default=None,
+        key=lambda o: float(np.linalg.norm(pos[o.index][:2] - xy)),
+    )
+
+
+def debug_detections(dets) -> None:
+    """Debug only: compare each YOLO pick point with the true pose of the nearest object."""
+    pos, quat = (a.numpy() for a in view.get_world_poses())
     for d in dets:
-        if on_belt:
-            near = min(on_belt, key=lambda p: np.linalg.norm(p[:2] - d.position[:2]))
-            if d.class_name in ("aluminum_can", "paper_carton"):  # symmetric: pick point = center
-                det_errors.append(d.position[:2] - near[:2])
-    if det_errors and len(det_errors) % 200 < len(dets):
-        e = np.array(det_errors)
-        n = np.linalg.norm(e, axis=1)
-        print(
-            f"[debug] detection-truth XY (cans/cartons): median |e| {np.median(n) * 100:.1f} cm, "
-            f"p90 {np.percentile(n, 90) * 100:.1f} cm, mean dx {e[:, 0].mean() * 100:+.1f} cm, "
-            f"mean dy {e[:, 1].mean() * 100:+.1f} cm, n={len(e)}"
+        near = _nearest_on_belt(d.position[:2], pos)
+        if near is None:
+            continue
+        center, axis2 = _true_frame(near, pos, quat[near.index])
+        along, across = _error_in_object_frame(d.position[:2], center[:2], axis2)
+        diag["detections"].append(
+            {
+                "t": round(d.t_observed, 2),
+                "true_class": near.class_name,
+                "pred_class": d.class_name,
+                "det_xy": [round(float(v), 4) for v in d.position[:2]],
+                "true_xyz": [round(float(v), 4) for v in center],
+                "axis": [round(float(v), 3) for v in axis2],
+                "along": round(along, 4),
+                "across": round(across, 4),
+                "pixel": list(d.pixel) if d.pixel else None,
+            }
         )
+
+
+def debug_grip_start(t: float) -> None:
+    """Debug only: where the suction tip goes down vs where the object really is."""
+    pos, quat = (a.numpy() for a in view.get_world_poses())
+    tr = controller.target
+    tip = controller.cmd
+    near = _nearest_on_belt(tip[:2], pos)
+    if near is None or tr is None:
+        return
+    center, axis2 = _true_frame(near, pos, quat[near.index])
+    along, across = _error_in_object_frame(tip[:2], center[:2], axis2)
+    vel = view.get_velocities()[0].numpy()[near.index]
+    diag["grips"].append(
+        {
+            "t": round(t, 2),
+            "track_id": tr.track_id,
+            "track_class": tr.class_name,
+            "true_class": near.class_name,
+            "asset": near.asset.name,
+            "tip": [round(float(v), 4) for v in tip],
+            "true_xyz": [round(float(v), 4) for v in center],
+            "axis": [round(float(v), 3) for v in axis2],
+            "along": round(along, 4),
+            "across": round(across, 4),
+            "true_vel": [round(float(v), 4) for v in vel[:2]],
+            "track_vel": None if tr.velocity is None else [round(float(v), 4) for v in tr.velocity],
+            "hits": tr.hits,
+            "obs_span": round(tr.observations[-1][0] - tr.observations[0][0], 2),
+        }
+    )
 
 
 def save_camera_frame(rgb: np.ndarray, dets, t: float) -> None:
@@ -288,7 +348,7 @@ while simulation_app.is_running():
             dets = perception.detect(rgb, t_image)
             tracker.update(dets)
             if args.debug and args.perception == "yolo":
-                debug_detection_error(dets)
+                debug_detections(dets)
             if args.save_camera and dets:
                 save_camera_frame(rgb, dets, t)
     tracker.prune(t)
@@ -299,7 +359,10 @@ while simulation_app.is_running():
     holding = str(status).endswith("Closed") and bool(gripped)
 
     # 4) decide + move the arm (IK on the commanded suction-tip position)
+    phase_before = controller.phase
     cmd = controller.step(t, dt, tracker, holding)
+    if args.debug and controller.phase == Phase.GRIP and phase_before != Phase.GRIP:
+        debug_grip_start(t)
     q_new = kin.solve_down(cmd.tip_target, q_cmd)
     if q_new is None:
         ik_failures += 1
@@ -385,5 +448,7 @@ print(text)
     ),
     encoding="utf-8",
 )
+if args.debug:
+    (out_dir / "diag.json").write_text(json.dumps(diag, indent=1), encoding="utf-8")
 print(f"[sorter] results in {out_dir}")
 simulation_app.close()
