@@ -1,14 +1,23 @@
 # 協作規則
 
-4 位組員 + 指導老師。這頁說明工作怎麼分、怎麼排進度、程式碼怎麼進 `main`。
+4 位組員 + 學長，指導老師不在 GitHub 上。這頁說明工作怎麼分、怎麼排進度、程式碼怎麼進 `main`。
 
 ## 角色
 
-| 角色 | 負責 |
-|---|---|
-| PM（專案管理） | 維護看板、主持例會、寫給老師的進度報告 |
-| 工作流負責人（每人一個） | 追自己工作流的 issue 有沒有在動；不代表只能做自己的工作流 |
-| 指導老師 | 看 Roadmap 與進度報告，做需要老師拍板的決定 |
+| 角色 | 負責 | GitHub 權限 |
+|---|---|---|
+| PM（專案管理） | 維護看板、主持例會、寫給老師的進度報告 | org Owner |
+| 工作流負責人（每人一個） | 追自己工作流的 issue 有沒有在動；不代表只能做自己的工作流 | team `members`（Write） |
+| 學長（kevin00156） | 技術顧問、review PR | org Owner |
+| 指導老師 | 看進度報告，做需要老師拍板的決定 | 不在 GitHub 上 |
+
+新組員：org Owner 邀請進 `nuume-trash-classification` 後，把對方加進 team `members` 才能推分支、開 PR。
+
+### 給老師的進度報告
+
+老師不看 GitHub，由 PM 每次迭代結束（或每月）整理一份報告寄給老師：
+Roadmap 截圖、這期完成的 milestone / issue、指標變化（取物成功率、mAP50），以及需要老師決定的事
+（看板上標 `teacher` label 的 issue）。老師的回覆由 PM 記回對應 issue 或會議紀錄。
 
 四個工作流的內容見 [README「四個工作流」](README.md#四個工作流每人一個)。
 issue 用 label 標工作流：`area:assets`、`area:training`、`area:real-data`、`area:eval-demo`、`area:infra`。
