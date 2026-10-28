@@ -35,7 +35,7 @@ flowchart LR
 
 | 東西 | 現在用的 | 之後換成 |
 |---|---|---|
-| 3D 模型 | 程式產生的圓柱 / 方塊（每類 6 種） | 網路模型 + 手機掃描（工作流 1） |
+| 3D 模型 | Objaverse 網路模型，每類 25 個，已人工篩選、保留貼圖（工作流 1）；沒轉檔時退回程式產生的圓柱 / 方塊 | 補台灣常見的鋁箔包等（手機掃描） |
 | 訓練資料 | 用替代模型產生的合成影像 | 用真實模型重新產生（工作流 2） |
 | 真實照片 / 標註 | 沒有 | 300 張測試 + 50–100 張微調（工作流 3） |
 | YOLO 權重 | 不進 git；照「快速開始」第 3–4 步自己產生（約 15 分鐘） | 用真實模型的資料正式訓練（工作流 2） |
@@ -146,9 +146,17 @@ uv run python perception/live_demo.py --weights runs\segment\sim_only\weights\be
 
 目標：每類 10–20 個真實模型。**不手動改模型**，全部用腳本處理。
 
-1. 從 Objaverse / Sketchfab 下載，或用手機掃描（Polycam、Scaniverse 等匯出 .obj / .glb）。
+0. **拿到團隊已選好的 100 個模型**（清單 `sim/assets/raw/objaverse_sources.csv` 在 git 裡，模型本身不在）：
+   `uv run --group assets python sim/assets/fetch_objaverse.py --restore`，再做第 3 步轉檔。
+1. 從 Objaverse 自動下載候選模型（每類 25 個，約 130 MB，會篩授權、面數、形狀）：
+   `uv run --group assets python sim/assets/fetch_objaverse.py`。
+   打開 `sim/assets/raw/review.html`，**勾選要保留的模型**，按「下載保留清單」，再執行
+   `uv run --group assets python sim/assets/fetch_objaverse.py --apply-review <keep.txt 路徑>`（沒勾的會刪掉）。
+   不加參數再跑一次會補新候選，重複勾選直到每類夠用。
+   不夠的類別再從 Sketchfab 手動下載，或用手機掃描（Polycam、Scaniverse 等匯出 .obj / .glb）。
 2. 放到 `sim/assets/raw/<類別>/`，在 `sizes.csv` 寫實物最長邊（詳見 [sim/assets/raw/README.md](sim/assets/raw/README.md)）。
 3. 批次轉檔：`scripts\isaac.cmd sim\assets\convert_assets.py`，看 `sim/assets/usd/real/report.csv`。
+   模型的貼圖（標籤、商標）會保留，最大 1024 px；加 `--no-textures` 會改回單一平均色（可拿來比較 sim-to-real）。
 4. 跑 `run_sorter.py --perception gt` 看物體在皮帶上是否正常、吸盤吸不吸得起來。
 
 注意：模型要能「平躺」在皮帶上（腳本會把最長邊轉到皮帶方向、最薄邊朝上）。

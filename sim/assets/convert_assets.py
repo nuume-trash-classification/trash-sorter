@@ -15,8 +15,9 @@ For every model the script:
   1. merges all parts into one mesh,
   2. rotates it so it lies flat (longest side -> X, thinnest side -> Z),
   3. scales it to real size, centers it,
-  4. assigns a class material (color averaged from the model's texture/colors; glass and
-     PET get a translucent material, cans get metal),
+  4. assigns a class material: the model's own color texture (labels, logos) when it has one,
+     else its average color; glass and PET are translucent, cans metal (``--no-textures``: always
+     the average color),
   5. adds a convex-hull collider and the class mass,
   6. writes ``sim/assets/usd/real/<class>/<name>.usdc`` following the asset contract in
      ``usd_utils.py``.
@@ -37,9 +38,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import numpy as np
 import trimesh
-from pxr import UsdGeom, UsdPhysics, Vt
+from pxr import Sdf, UsdGeom, UsdPhysics, Vt
 
-from sim.assets.usd_utils import bind, finish_asset, new_asset_stage, preview_material
+from sim.assets.usd_utils import add_base_color_texture, bind, finish_asset, new_asset_stage, preview_material
 from trash_sorter import config
 
 HERE = Path(__file__).resolve().parent
@@ -47,6 +48,7 @@ RAW_DIR = HERE / "raw"
 OUT_DIR = HERE / "usd" / "real"
 MODEL_EXTS = {".obj", ".glb", ".gltf", ".stl", ".ply", ".off"}
 MAX_FACES_WARN = 50_000
+MAX_TEXTURE = 1024  # px; 100 objects with 4K textures would eat GPU memory
 
 # Per-class look: (metallic, roughness, opacity, ior). Color comes from the model.
 CLASS_LOOK = {
@@ -86,8 +88,28 @@ def average_color(mesh: trimesh.Trimesh) -> tuple[float, float, float] | None:
         return None
     if colors is None or len(colors) == 0:
         return None
-    rgb = np.asarray(colors)[:, :3].mean(axis=0) / 255.0
+    rgb = np.atleast_2d(colors)[:, :3].mean(axis=0) / 255.0  # one color for the whole mesh comes back 1-D
     return float(rgb[0]), float(rgb[1]), float(rgb[2])
+
+
+def base_color_image(mesh: trimesh.Trimesh):
+    """The model's color texture (PIL image) if it has one with per-vertex UVs, else None.
+
+    ``trimesh.load(force="mesh")`` packs the textures of all parts into one atlas.
+    """
+    visual = mesh.visual
+    if getattr(visual, "kind", None) != "texture" or visual.uv is None or len(visual.uv) != len(mesh.vertices):
+        return None
+    material = visual.material
+    return getattr(material, "baseColorTexture", None) or getattr(material, "image", None)
+
+
+def save_texture(image, path: Path) -> None:
+    """RGB only (class opacity applies to the whole object), at most MAX_TEXTURE px per side."""
+    image = image.convert("RGB")
+    image.thumbnail((MAX_TEXTURE, MAX_TEXTURE))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(path)
 
 
 def normalize_pose(mesh: trimesh.Trimesh, target_length: float) -> tuple[trimesh.Trimesh, np.ndarray]:
@@ -108,7 +130,7 @@ def normalize_pose(mesh: trimesh.Trimesh, target_length: float) -> tuple[trimesh
     return mesh, mesh.extents.copy()
 
 
-def write_usd(mesh: trimesh.Trimesh, out_path: Path, cls: str, rgb: tuple[float, float, float]) -> None:
+def write_usd(mesh: trimesh.Trimesh, out_path: Path, cls: str, rgb: tuple[float, float, float], texture=None) -> None:
     stage = new_asset_stage(out_path)
     geom = UsdGeom.Mesh.Define(stage, "/Object/Mesh")
     geom.CreatePointsAttr(Vt.Vec3fArray.FromNumpy(mesh.vertices.astype(np.float32)))
@@ -120,13 +142,20 @@ def write_usd(mesh: trimesh.Trimesh, out_path: Path, cls: str, rgb: tuple[float,
     lo, hi = mesh.bounds
     geom.CreateExtentAttr([tuple(map(float, lo)), tuple(map(float, hi))])
     metallic, roughness, opacity, ior = CLASS_LOOK[cls]
-    bind(geom.GetPrim(), preview_material(stage, "/Object/Looks/Main", rgb, metallic, roughness, opacity, ior))
+    material = preview_material(stage, "/Object/Looks/Main", rgb, metallic, roughness, opacity, ior)
+    if texture is not None:
+        tex_path = out_path.with_name(f"{out_path.stem}_basecolor.png")
+        save_texture(texture, tex_path)
+        uv = UsdGeom.PrimvarsAPI(geom).CreatePrimvar("st", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.vertex)
+        uv.Set(Vt.Vec2fArray.FromNumpy(np.asarray(mesh.visual.uv, dtype=np.float32)))
+        add_base_color_texture(stage, "/Object/Looks/Main", f"./{tex_path.name}")
+    bind(geom.GetPrim(), material)
     UsdPhysics.CollisionAPI.Apply(geom.GetPrim())
     UsdPhysics.MeshCollisionAPI.Apply(geom.GetPrim()).CreateApproximationAttr("convexHull")
     finish_asset(stage, cls, float(mesh.extents[2]), config.CLASS_SPECS[cls].mass)
 
 
-def convert_class(cls: str, raw_dir: Path, out_dir: Path, dry_run: bool) -> list[dict]:
+def convert_class(cls: str, raw_dir: Path, out_dir: Path, dry_run: bool, textures: bool = True) -> list[dict]:
     class_dir = raw_dir / cls
     if not class_dir.is_dir():
         return []
@@ -141,6 +170,7 @@ def convert_class(cls: str, raw_dir: Path, out_dir: Path, dry_run: bool) -> list
             target = sizes.get(path.name, default_len)
             mesh, ext = normalize_pose(mesh, target)
             rgb = average_color(mesh) or (0.6, 0.6, 0.6)
+            texture = base_color_image(mesh) if textures else None
             row.update(
                 length=round(ext[0], 4), width=round(ext[1], 4), thickness=round(ext[2], 4), faces=len(mesh.faces)
             )
@@ -151,7 +181,7 @@ def convert_class(cls: str, raw_dir: Path, out_dir: Path, dry_run: bool) -> list
                 notes.append(f"{len(mesh.faces)} faces: heavy, consider decimating")
             row["note"] = "; ".join(notes)
             if not dry_run:
-                write_usd(mesh, out_dir / cls / f"{path.stem}.usdc", cls, rgb)
+                write_usd(mesh, out_dir / cls / f"{path.stem}.usdc", cls, rgb, texture)
         except Exception as exc:  # keep going: one broken download must not stop the batch
             row.update(status="failed", note=str(exc))
         rows.append(row)
@@ -164,11 +194,12 @@ def main() -> None:
     ap.add_argument("--out", type=Path, default=OUT_DIR)
     ap.add_argument("--classes", nargs="*", default=list(config.CLASS_NAMES))
     ap.add_argument("--dry-run", action="store_true", help="only check the models, write nothing")
+    ap.add_argument("--no-textures", action="store_true", help="flat class color only (the old look, for comparison)")
     args = ap.parse_args()
 
     rows = []
     for cls in args.classes:
-        rows += convert_class(cls, args.raw, args.out, args.dry_run)
+        rows += convert_class(cls, args.raw, args.out, args.dry_run, textures=not args.no_textures)
     if not rows:
         print(f"No models found under {args.raw}/<class>/ (extensions: {sorted(MODEL_EXTS)})")
         return

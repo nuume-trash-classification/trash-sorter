@@ -9,7 +9,7 @@ an overlapping object rests on top of the other), then domain randomization of
   * light intensity, color temperature and direction,
   * belt color and roughness,
   * camera height / position / angle (small jitter around the calibrated pose),
-  * object color / roughness.
+  * object color / roughness (a tint on the texture for textured models).
 Instance masks come from Replicator's ``instance_id_segmentation`` annotator, so labels are
 exact and free. Uses the same scene, camera and assets as ``run_sorter.py``.
 """
@@ -46,6 +46,7 @@ import omni.replicator.core as rep
 from pxr import Gf, Usd, UsdGeom, UsdShade
 
 from sim.assets.library import describe, find_assets
+from sim.assets.usd_utils import base_color_texture
 from sim.scene import CAMERA_PATH, build_scene
 from trash_sorter import config
 from trash_sorter.yolo_format import draw_overlay, mask_to_label_line, parse_label_file, write_data_yaml
@@ -81,15 +82,22 @@ for obj in objects:
     xform_ops[obj.path] = (ops[0], ops[1])  # translate, orient
 
 
-def object_shaders(obj) -> list[tuple[UsdShade.Shader, Gf.Vec3f, float]]:
-    """(shader, original color, original roughness) for every material inside an object."""
+def object_shaders(obj) -> list[tuple[UsdShade.Input, Gf.Vec3f, UsdShade.Input, float]]:
+    """(color input, original color, roughness input, original roughness) for every material in an object.
+
+    A textured material's color input is its texture's ``scale`` (a tint on the image).
+    """
     found = []
     for prim in Usd.PrimRange(stage.GetPrimAtPath(obj.path)):
         if prim.IsA(UsdShade.Shader):
             sh = UsdShade.Shader(prim)
             col, rough = sh.GetInput("diffuseColor"), sh.GetInput("roughness")
-            if col and rough:
-                found.append((sh, Gf.Vec3f(col.Get()), float(rough.Get())))
+            if not (col and rough):
+                continue
+            tex = base_color_texture(sh)
+            if tex is not None:
+                col = tex.GetInput("scale")
+            found.append((col, Gf.Vec3f(*list(col.Get())[:3]), rough, float(rough.Get())))
     return found
 
 
@@ -177,11 +185,10 @@ def randomize(chosen) -> None:
         elif op.GetOpType() == UsdGeom.XformOp.TypeOrient:
             op.Set(Gf.Quatd(rot_q) if op.GetPrecision() == UsdGeom.XformOp.PrecisionDouble else Gf.Quatf(rot_q))
     for obj in chosen:
-        for sh, color, rough in shaders[obj.path]:
-            scale = rng.uniform(0.75, 1.25, 3)
-            new = np.clip(np.array(color) * scale, 0, 1)
-            sh.GetInput("diffuseColor").Set(Gf.Vec3f(*map(float, new)))
-            sh.GetInput("roughness").Set(float(np.clip(rough + rng.uniform(-0.1, 0.1), 0.02, 1.0)))
+        for col_in, color, rough_in, rough in shaders[obj.path]:
+            new = [float(c) for c in np.clip(np.array(color) * rng.uniform(0.75, 1.25, 3), 0, 1)]
+            col_in.Set(Gf.Vec4f(*new, 1.0) if col_in.GetTypeName() == "float4" else Gf.Vec3f(*new))
+            rough_in.Set(float(np.clip(rough + rng.uniform(-0.1, 0.1), 0.02, 1.0)))
 
 
 def id_to_path(info: dict) -> dict[int, str]:
