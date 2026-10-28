@@ -1,0 +1,30 @@
+name: 問題回報 / Bug
+description: 程式出錯、結果不對、模擬行為異常
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 發生什麼事
+      description: 實際看到的結果 vs. 預期結果。有錯誤訊息請完整貼上。
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 重現步驟
+      placeholder: |
+        1. 執行 `scripts\isaac.cmd sim\run_sorter.py --perception yolo --headless`
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: 版本
+      description: "`git rev-parse --short HEAD` 的輸出"
+  - type: textarea
+    id: env
+    attributes:
+      label: 環境
+      placeholder: 作業系統、顯卡、Isaac Sim 版本

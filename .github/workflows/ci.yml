@@ -1,0 +1,18 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      # Skip the CUDA/ML group: unit tests only cover the pure-Python core and tools.
+      - run: uv sync --locked --no-group ml
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest
