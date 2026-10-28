@@ -36,12 +36,12 @@ issue 用 label 標工作流：`area:assets`、`area:training`、`area:real-data
 
 `main` 有保護：**不能直接 push，一律走 Pull Request（PR）**，CI 要過、至少 1 人 review。
 
-第一次設定（只做一次）。所有專案統一放在 `%USERPROFILE%\Documentsepo\<專案名>`，
+第一次設定（只做一次）。所有專案統一放在 `%USERPROFILE%\Documents\repo\<專案名>`，
 這個路徑不能在 OneDrive 或 Google Drive 同步範圍內（同步 `.git` 會弄壞 repo）：
 
 ```bat
-mkdir %USERPROFILE%\Documentsepo
-cd /d %USERPROFILE%\Documentsepo
+mkdir %USERPROFILE%\Documents\repo
+cd /d %USERPROFILE%\Documents\repo
 gh repo clone nuume-trash-classification/trash-sorter
 cd trash-sorter
 uv sync
