@@ -25,7 +25,7 @@ issue 用 label 標工作流：`area:assets`、`area:training`、`area:real-data
 ## 進度管理
 
 - **所有工作都開 issue**，寫清楚「完成條件」。沒有 issue 的工作，別人看不到。
-- **看板**（GitHub Projects）：`Backlog → Todo → In Progress → In Review → Done`。
+- **[看板](https://github.com/orgs/nuume-trash-classification/projects/1)**（GitHub Projects）：`Backlog → Todo → In Progress → In Review → Done`。
   開始做就把卡片拉到 In Progress，並把自己設成 Assignee。
 - **Milestone** = 專題的時程節點。每個 issue 掛到一個 milestone。
 - **兩週一次迭代**：開始時從 Backlog 挑這兩週要做的；結束時 demo + 回顧（約 30 分鐘）。
