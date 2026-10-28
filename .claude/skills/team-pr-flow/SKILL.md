@@ -45,17 +45,17 @@ Done when: you are on `<issue>-<slug>` based on current `origin/main`, and the i
    uv run pytest
    ```
 
-2. Stage files by name (`git add <path>…`). Commit only source, tests, docs, and small config. Datasets, weights (`*.pt`, `*.onnx`), renders, generated USD, and `.env` stay out of git; `.gitignore` covers most of them, so review `git status` for anything it misses and share large files by drive link in the PR instead.
+2. Stage files by name (`git add <path>…`). Commit only source, tests, docs, and small config. Datasets, weights (`*.pt`, `*.onnx`), renders, generated USD, and `.env` stay out of git; `.gitignore` covers most of them, so review `git status` for anything it misses. Large files go to Google Drive following `docs/storage.md`, linked from the PR.
 3. Commit message in English, imperative, one focused change per commit (`Add glass material to asset converter`).
 
 Done when: ruff and pytest are clean and `git status` shows only the intended changes committed.
 
 ## Stage 3: push and open the PR
 
-1. Rebase onto the latest main if it has moved, rerun pytest, then push:
+1. Bring in the latest main if it has moved (merge keeps the push fast-forward; the PR is squash-merged, so main stays linear), rerun pytest, then push:
 
    ```sh
-   git fetch origin && git rebase origin/main
+   git fetch origin && git merge origin/main
    git push -u origin HEAD
    ```
 

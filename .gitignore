@@ -23,6 +23,7 @@ sim/assets/raw/*
 
 # Local settings
 .env
+.claude/settings.local.json
 local_settings.*
 uv_ml.log
 *.log
