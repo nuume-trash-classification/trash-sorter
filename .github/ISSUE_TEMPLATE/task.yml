@@ -1,0 +1,38 @@
+name: 工作項目 / Task
+description: 一件要完成的工作（功能、實驗、資料、文件）
+labels: ["type:task"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: 工作流
+      options:
+        - 1 3D 資產
+        - 2 合成資料 + 訓練
+        - 3 真實照片與標註
+        - 4 評估、手臂與 demo
+        - 共用 / 基礎建設
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: 要做什麼、為什麼
+      placeholder: 一兩句話說明目的，連到 docs/design.md 的相關段落更好。
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: 完成條件
+      description: 別人看了就能判斷「做完了沒」。盡量可驗證（指標、檔案、指令輸出）。
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: 備註 / 相依
+      placeholder: 卡在哪個 issue（#編號）、參考資料等。

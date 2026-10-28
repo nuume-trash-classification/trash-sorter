@@ -10,6 +10,7 @@ UR10 手臂用吸盤**在皮帶不停的情況下**把物體吸起來 → 丟進
 - 類別：`pet_bottle`（寶特瓶）、`aluminum_can`（鋁罐）、`paper_carton`（紙盒 / 利樂包）、`glass_bottle`（玻璃瓶）。
 
 完整設計：[docs/design.md](docs/design.md)。
+協作規則（分工、看板、PR 流程）：[CONTRIBUTING.md](CONTRIBUTING.md)。
 上一版原型（氣壓缸推桿 demo）：[nuume-trash-classification/pneumatic-demo](https://github.com/nuume-trash-classification/pneumatic-demo)。
 
 ```mermaid
