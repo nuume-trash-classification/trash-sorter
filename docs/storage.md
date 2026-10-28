@@ -14,7 +14,7 @@
 
 3. 確認：`Test-Path $env:TRASH_SORTER_DRIVE` 輸出 `True`。
 
-git repo 本身放在 Drive 以外的資料夾（例如 `Documents\repo\trash-sorter`）：Drive 同步 `.git` 會弄壞 repo。
+git repo 本身固定放在 `%USERPROFILE%\Documents\repo\trash-sorter`，不在 Google Drive 或 OneDrive 的同步範圍內：同步 `.git` 會弄壞 repo。
 
 ## 資料夾結構
 
