@@ -82,6 +82,13 @@ trash-sorter/
    set ISAACSIM_PYTHON=D:\path\to\env_isaacsim\Scripts\python.exe
    ```
 
+   **用 standalone 版（zip 解壓）也可以**：把 `ISAACSIM_PYTHON` 指到它的 `python.bat`。
+   已用 6.2.0-rc.14 跑通 `run_sorter.py --perception gt --headless`。
+
+   ```bat
+   set ISAACSIM_PYTHON=D:\isaacsim\python.bat
+   ```
+
    `--perception yolo` 需要在 Isaac Sim 的 venv 裡加裝 ultralytics（不要動到它的 torch / opencv）：
 
    ```bat
@@ -99,6 +106,10 @@ trash-sorter/
    只跑單元測試、不想裝 torch 的話：`uv sync --no-group ml`。
 
 第一次跑模擬會從 NVIDIA 雲端下載 UR10 模型，需要網路。
+
+第一次啟動 Isaac Sim 要編譯 shader、建 cache，可能要將近 10 分鐘（RTX 4060 Laptop 實測，120 秒的模擬總共約 9 分鐘）。
+cache 寫在 Isaac Sim 安裝目錄下的 `kit\cache`，那顆磁碟要留足夠空間；空間不足時模擬照樣能跑，
+但 log 會出現 `No space left on device` / `磁碟的空間不足` 警告、cache 存不下來，之後每次啟動都一樣慢。
 
 ## 快速開始
 
