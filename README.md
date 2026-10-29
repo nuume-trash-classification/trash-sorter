@@ -107,7 +107,8 @@ trash-sorter/
 
 第一次跑模擬會從 NVIDIA 雲端下載 UR10 模型，需要網路。
 
-第一次啟動 Isaac Sim 要編譯 shader、建 cache，可能要將近 10 分鐘（RTX 4060 Laptop 實測，120 秒的模擬總共約 9 分鐘）。
+第一次啟動 Isaac Sim 要編譯 shader、建 cache，啟動就要約 5 分鐘（RTX 4060 Laptop 實測，120 秒的模擬總共約 9 分鐘）；
+cache 建好後啟動只要約 15 秒，同樣的模擬總共約 4 分鐘。
 cache 寫在 Isaac Sim 安裝目錄下的 `kit\cache`，那顆磁碟要留足夠空間；空間不足時模擬照樣能跑，
 但 log 會出現 `No space left on device` / `磁碟的空間不足` 警告、cache 存不下來，之後每次啟動都一樣慢。
 
