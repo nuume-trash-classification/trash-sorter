@@ -39,26 +39,33 @@ def test_tracker_prunes_objects_off_the_belt():
     assert tr.active() == []
 
 
-def _run(objects, duration=25.0, dt=1 / 60, grip_ok=lambda obj: True):
-    """Perfect-arm simulation: tip goes exactly where commanded; suction holds if tip is close."""
+def _run(objects, duration=25.0, dt=1 / 60, grip_ok=lambda obj: True, lag=0.0):
+    """Simulated arm: the real tip follows the command with a first-order lag of ``lag`` s (0 = perfect).
+
+    Suction holds if the real tip is close; ``delivered`` records where the real tip was when it opened.
+    """
     tracker = BeltTracker()
     ctrl = PickController()
     held = None
     delivered = []
+    tip = np.array(ctrl.params.idle_position, dtype=float)
     t = 0.0
     while t < duration:
         visible = [o for o in objects if not o.get("gone") and -1.15 < o["x0"] + V * t < -0.35]
         if int(t / config.CAMERA_PERIOD) != int((t - dt) / config.CAMERA_PERIOD):
             tracker.update([det(o["x0"] + V * t, o["y"], t, o["cls"]) for o in visible])
         tracker.prune(t)
-        cmd = ctrl.step(t, dt, tracker, held is not None)
+        cmd = ctrl.step(t, dt, tracker, held is not None, tip)
+        prev = tip
+        tip = cmd.tip_target.copy() if lag == 0 else tip + (cmd.tip_target - tip) * min(dt / lag, 1.0)
+        tip_speed = float(np.linalg.norm(tip - prev)) / dt
         if cmd.gripper == GripperCommand.CLOSE and held is None:
             for o in objects:
                 p = np.array([o["x0"] + V * t, o["y"], TOP])
-                if not o.get("gone") and np.linalg.norm(cmd.tip_target - p) < 0.01 and grip_ok(o):
+                if not o.get("gone") and np.linalg.norm(tip - p) < 0.02 and grip_ok(o):
                     held, o["gone"] = o, True
         if cmd.gripper == GripperCommand.OPEN and held is not None:
-            delivered.append((held["cls"], ctrl.bin_name, cmd.tip_target.copy()))
+            delivered.append((held["cls"], ctrl.bin_name, tip.copy(), tip_speed))
             held = None
         t += dt
     return ctrl, delivered
@@ -68,11 +75,23 @@ def test_controller_picks_every_object_with_perfect_arm():
     objects = [{"x0": -1.4 - 0.6 * i, "y": [-0.1, 0.0, 0.1][i % 3], "cls": config.CLASS_NAMES[i % 4]} for i in range(4)]
     ctrl, delivered = _run(objects, duration=40)
     assert len(delivered) == 4
-    for cls, bin_name, tip in delivered:
+    for cls, bin_name, tip, _ in delivered:
         assert cls == bin_name
         bx, by = config.BIN_CENTERS[bin_name]
         np.testing.assert_allclose(tip[:2], [bx, by], atol=0.011)
     assert ctrl.phase == Phase.IDLE
+
+
+def test_controller_waits_for_the_real_arm_before_releasing():
+    # A lagging real arm passes the drop point at speed; released then, the object keeps the arm's
+    # velocity and is thrown past the bin. The suction must open only once the real tip is there AND still.
+    objects = [{"x0": -1.4 - 0.6 * i, "y": 0.0, "cls": config.CLASS_NAMES[i % 4]} for i in range(4)]
+    ctrl, delivered = _run(objects, duration=40, lag=0.12)
+    assert len(delivered) == 4
+    for _, bin_name, tip, speed in delivered:
+        bx, by = config.BIN_CENTERS[bin_name]
+        assert np.linalg.norm(tip[:2] - [bx, by]) < ctrl.params.release_tolerance + 1e-6
+        assert speed < ctrl.params.release_max_tip_speed + 1e-6
 
 
 def test_controller_reports_failed_grip_and_moves_on():

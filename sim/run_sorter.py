@@ -191,6 +191,7 @@ def score_objects(t: float) -> None:
         park(obj)
 
 
+debug_watch = None  # --debug: (object, t) just released, followed for 1.2 s
 diag: dict[str, list] = {"detections": [], "grips": []}  # --debug only, written to diag.json
 
 
@@ -360,7 +361,8 @@ while simulation_app.is_running():
 
     # 4) decide + move the arm (IK on the commanded suction-tip position)
     phase_before = controller.phase
-    cmd = controller.step(t, dt, tracker, holding)
+    tip_actual, _ = kin.tip_pose(robot.get_dof_positions().numpy()[0])  # measured joints, like a real arm
+    cmd = controller.step(t, dt, tracker, holding, tip_actual)
     if args.debug and controller.phase == Phase.GRIP and phase_before != Phase.GRIP:
         debug_grip_start(t)
     q_new = kin.solve_down(cmd.tip_target, q_cmd)
@@ -371,8 +373,29 @@ while simulation_app.is_running():
         robot.set_dof_velocity_targets(((q_new - q_cmd) / dt).tolist())
         q_cmd = q_new
     if cmd.gripper != gripper_state:
+        if args.debug and cmd.gripper == GripperCommand.OPEN and holding_path is not None:
+            tip_now, _ = kin.tip_pose(robot.get_dof_positions().numpy()[0])
+            held = next(o for o in objects if o.path == holding_path)
+            debug_watch = (held, t)
+            print(
+                f"[debug] t={t:.2f} open {held.class_name} cmd={np.round(cmd.tip_target, 3)} "
+                f"tip={np.round(tip_now, 3)} object={np.round(view.get_world_poses()[0].numpy()[held.index], 3)} "
+                f"q={np.round(robot.get_dof_positions().numpy()[0], 3).tolist()}"
+            )
         (gripper.close_gripper if cmd.gripper == GripperCommand.CLOSE else gripper.open_gripper)(GRIPPER_PATH)
         gripper_state = cmd.gripper
+
+    if args.debug and controller.phase == Phase.RELEASE and phase_before != Phase.RELEASE and holding_path:
+        debug_watch = (next(o for o in objects if o.path == holding_path), t)  # follow from arrival at the bin
+    if args.debug and debug_watch is not None and t - debug_watch[1] < 1.2 and int(t / dt) % 3 == 0:
+        w_obj = debug_watch[0]
+        print(
+            f"[debug]   +{t - debug_watch[1]:.2f}s {w_obj.class_name} at "
+            f"{np.round(view.get_world_poses()[0].numpy()[w_obj.index], 3)} tip={np.round(tip_actual, 3)} "
+            f"v={np.round(view.get_velocities()[0].numpy()[w_obj.index], 2)} "
+            f"w={np.round(view.get_velocities()[1].numpy()[w_obj.index], 1)} "
+            f"suction={gripper.get_gripper_status(GRIPPER_PATH)}"
+        )
 
     # 5) bookkeeping for scoring
     for ev in controller.events[n_events:]:
