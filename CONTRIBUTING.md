@@ -70,7 +70,7 @@ PR 被要求修改時：在同一個分支繼續 commit、push，PR 會自動更
 ## 不進 git 的東西
 
 資料集、模型權重、渲染影片、轉出來的 USD 資產都不進 git（見 `.gitignore`）。
-這些放團隊共用雲端硬碟，PR 或 issue 裡附連結即可。API key、`.env` 絕對不要 commit。
+這些放團隊 Google Drive（見 [docs/storage.md](docs/storage.md)），PR 或 issue 裡附連結即可。API key、`.env` 絕對不要 commit。
 
 ## 真實測試集隔離
 
