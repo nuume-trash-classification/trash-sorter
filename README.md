@@ -35,7 +35,7 @@ flowchart LR
 
 | 東西 | 現在用的 | 之後換成 |
 |---|---|---|
-| 3D 模型 | 程式產生的圓柱 / 方塊（每類 6 種） | 網路模型 + 手機掃描（工作流 1） |
+| 3D 模型 | Objaverse 網路模型，每類 25 個，已人工篩選、保留貼圖（工作流 1）；沒轉檔時退回程式產生的圓柱 / 方塊 | 補台灣常見的鋁箔包等（手機掃描） |
 | 訓練資料 | 用替代模型產生的合成影像 | 用真實模型重新產生（工作流 2） |
 | 真實照片 / 標註 | 沒有 | 300 張測試 + 50–100 張微調（工作流 3） |
 | YOLO 權重 | 不進 git；照「快速開始」第 3–4 步自己產生（約 15 分鐘） | 用真實模型的資料正式訓練（工作流 2） |
@@ -146,9 +146,17 @@ uv run python perception/live_demo.py --weights runs\segment\sim_only\weights\be
 
 目標：每類 10–20 個真實模型。**不手動改模型**，全部用腳本處理。
 
-1. 從 Objaverse / Sketchfab 下載，或用手機掃描（Polycam、Scaniverse 等匯出 .obj / .glb）。
+0. **拿到團隊已選好的 100 個模型**（清單 `sim/assets/raw/objaverse_sources.csv` 在 git 裡，模型本身不在）：
+   `uv run --group assets python sim/assets/fetch_objaverse.py --restore`，再做第 3 步轉檔。
+1. 從 Objaverse 自動下載候選模型（每類 25 個，約 130 MB，會篩授權、面數、形狀）：
+   `uv run --group assets python sim/assets/fetch_objaverse.py`。
+   打開 `sim/assets/raw/review.html`，**勾選要保留的模型**，按「下載保留清單」，再執行
+   `uv run --group assets python sim/assets/fetch_objaverse.py --apply-review <keep.txt 路徑>`（沒勾的會刪掉）。
+   不加參數再跑一次會補新候選，重複勾選直到每類夠用。
+   不夠的類別再從 Sketchfab 手動下載，或用手機掃描（Polycam、Scaniverse 等匯出 .obj / .glb）。
 2. 放到 `sim/assets/raw/<類別>/`，在 `sizes.csv` 寫實物最長邊（詳見 [sim/assets/raw/README.md](sim/assets/raw/README.md)）。
 3. 批次轉檔：`scripts\isaac.cmd sim\assets\convert_assets.py`，看 `sim/assets/usd/real/report.csv`。
+   模型的貼圖（標籤、商標）會保留，最大 1024 px；加 `--no-textures` 會改回單一平均色（可拿來比較 sim-to-real）。
 4. 跑 `run_sorter.py --perception gt` 看物體在皮帶上是否正常、吸盤吸不吸得起來。
 
 注意：模型要能「平躺」在皮帶上（腳本會把最長邊轉到皮帶方向、最薄邊朝上）。
@@ -223,6 +231,17 @@ uv run python perception/live_demo.py --weights runs\segment\sim_only\weights\be
 | `train.py`（yolo26n-seg，40 epoch） | 合成驗證集 mask mAP50 = 0.993（同領域，**不是**真實照片成績） |
 | `run_sorter.py --perception yolo --headless --duration 300` | 70 個物體：**取物成功率 85.7%（60/70）**、漏撿率 14.3%、分類正確率 96.7%、掉落 0（修正透視偏差後；修正前 74.6%） |
 | `live_demo.py` | webcam 0 與影片檔都能跑；有遮罩、類別、吸取點 |
+
+### v2（真實模型、透明瓶、燈光、手臂加速）
+
+2026-10-29，同一台電腦。**100 個 Objaverse 真實模型**（保留貼圖、透明瓶用玻璃材質），倉庫 HDRI 燈光，`--perception gt`，300 秒。
+
+| 物體間隔 | 取物成功率 | 漏撿 | 掉落 | 分類正確 | 每次取放 |
+|---|---|---|---|---|---|
+| 平均 4 秒（預設） | **100%（70/70）** | 0% | 0% | 100% | — |
+| 平均 2.5 秒 | **97.3%（110/113）** | 2.7% | 0% | 100% | 約 2.4 秒 |
+
+（改之前：4 秒間隔 98.6%，每次取放約 4.1 秒，2.5 秒間隔跟不上。原因與修正見 `docs/design.md`「實作補充 v2」。）
 
 已知問題（v1）：
 

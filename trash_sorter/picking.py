@@ -39,15 +39,22 @@ class ArmCommand:
 
 @dataclass
 class PickParams:
-    max_speed: float = 1.0  # m/s, suction tip Cartesian speed
-    max_accel: float = 4.0  # m/s^2, smooth starts/stops so nothing gets thrown
-    descend_speed: float = 0.35
-    hover_height: float = 0.08  # above the object's top surface
+    # Fast enough to keep up with an object every ~2.5 s. 1.8 m/s at the tip stays under the UR10's
+    # ~120 deg/s base joint limit, but near the base (the can bin) the real arm still lags the command,
+    # so the release waits for the real tip (``release_tolerance``).
+    max_speed: float = 1.8  # m/s, suction tip Cartesian speed
+    max_accel: float = 8.0  # m/s^2, still smooth: ~0.25 g sideways on a held bottle
+    lift_speed_factor: float = 0.8  # lift a bit slower than max_speed so the object is not yanked
+    descend_speed: float = 0.6
+    hover_height: float = 0.05  # above the object's top surface
     grip_clearance: float = 0.004  # tip height above the top surface when sucking
     grip_timeout: float = 0.6
     lift_z: float = 1.0
-    release_settle: float = 0.15  # wait before opening the suction above the bin
-    release_time: float = 0.45
+    release_settle: float = 0.15  # let the arm stop above the bin first: a moving release throws the object
+    release_time: float = 0.3
+    release_tolerance: float = 0.02  # m, the real tip must be this close to the drop point to open
+    release_max_tip_speed: float = 0.05  # m/s, ... and nearly still: the object leaves with the tip's velocity
+    release_max_wait: float = 1.5  # s, open anyway (and count it) if the real tip never gets there
     min_confidence: float = 0.5
     min_hits: int = 3
     duplicate_radius: float = 0.08  # other tracks this close to a picked one are the same object
@@ -62,7 +69,7 @@ class PickEvent:
     """Something the controller decided or observed; used for metrics."""
 
     t: float
-    kind: str  # "claim", "grasp", "grasp_failed", "release", "abandon"
+    kind: str  # "claim", "grasp", "grasp_failed", "release", "release_unsettled", "abandon"
     track_id: int
     class_name: str
     bin_name: str | None = None
@@ -82,6 +89,8 @@ class PickController:
         self.gripper = GripperCommand.OPEN
         self.bin_name: str | None = None
         self.events: list[PickEvent] = []
+        self.opened_t: float | None = None  # when the suction opened in RELEASE
+        self.last_tip: np.ndarray | None = None  # previous ``tip_actual``, for the real tip speed
 
     # ------------------------------------------------------------------ helpers
     def _set_phase(self, phase: Phase, t: float) -> None:
@@ -138,9 +147,18 @@ class PickController:
         return best
 
     # ------------------------------------------------------------------ main step
-    def step(self, t: float, dt: float, tracker: BeltTracker, holding: bool) -> ArmCommand:
+    def step(
+        self, t: float, dt: float, tracker: BeltTracker, holding: bool, tip_actual: np.ndarray | None = None
+    ) -> ArmCommand:
+        """One control tick. ``tip_actual``: the real suction tip (forward kinematics of the measured
+        joints); the release waits for it. ``None`` assumes the arm follows the command exactly."""
         p = self.params
         tr = self.target
+        tip_speed = 0.0
+        if tip_actual is not None:
+            if self.last_tip is not None and dt > 0:
+                tip_speed = float(np.linalg.norm(tip_actual - self.last_tip)) / dt
+            self.last_tip = np.array(tip_actual, dtype=np.float64)
 
         if self.phase == Phase.IDLE:
             self.gripper = GripperCommand.OPEN
@@ -197,7 +215,7 @@ class PickController:
         elif self.phase == Phase.LIFT:
             # Straight up (keeping a little belt motion so the object is not dragged); start the
             # transport move as soon as it is high enough.
-            self._move_toward(self.lift_goal, dt, p.max_speed * 0.6)
+            self._move_toward(self.lift_goal, dt, p.max_speed * p.lift_speed_factor)
             if self.cmd[2] >= p.lift_z - 0.03:
                 self._set_phase(Phase.TRANSPORT if self.target is not None else Phase.IDLE, t)
 
@@ -206,13 +224,26 @@ class PickController:
                 self._set_phase(Phase.RELEASE, t)
 
         elif self.phase == Phase.RELEASE:
-            self._move_toward(self._bin_drop_point(), dt, p.max_speed)
-            if t - self.phase_t0 >= p.release_settle:  # let the arm come to rest, then drop
-                self.gripper = GripperCommand.OPEN
-            if t - self.phase_t0 >= p.release_time:
-                assert self.target is not None
-                self.events.append(PickEvent(t, "release", self.target.track_id, self.target.class_name, self.bin_name))
+            assert self.target is not None
+            tgt = self.target
+            drop = self._bin_drop_point()
+            self._move_toward(drop, dt, p.max_speed)
+            waited = t - self.phase_t0
+            if self.opened_t is None:
+                # Open only once the real arm is there and nearly still: the object leaves with the tip's
+                # velocity, and a lagging arm passes the drop point at full speed.
+                near = tip_actual is None or float(np.linalg.norm(tip_actual - drop)) <= p.release_tolerance
+                at_drop = near and tip_speed <= p.release_max_tip_speed
+                if (waited >= p.release_settle and at_drop) or waited >= p.release_max_wait:
+                    if not at_drop:
+                        late = PickEvent(t, "release_unsettled", tgt.track_id, tgt.class_name, self.bin_name)
+                        self.events.append(late)
+                    self.gripper = GripperCommand.OPEN
+                    self.opened_t = t
+            elif t - self.opened_t >= p.release_time - p.release_settle:
+                self.events.append(PickEvent(t, "release", tgt.track_id, tgt.class_name, self.bin_name))
                 self.target = None
+                self.opened_t = None
                 self._set_phase(Phase.IDLE, t)
 
         return ArmCommand(self.cmd.copy(), self.gripper)

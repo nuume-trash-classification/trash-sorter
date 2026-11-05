@@ -6,10 +6,11 @@
 Each frame: 1-4 objects lying on the belt under the sorter camera (slight overlap allowed:
 an overlapping object rests on top of the other), then domain randomization of
   * object pose, count and asset variant,
-  * light intensity, color temperature and direction,
+  * lighting: indoor HDRI room, 0-4 ceiling panels (intensity, color temperature, height),
+    sometimes a soft window light,
   * belt color and roughness,
   * camera height / position / angle (small jitter around the calibrated pose),
-  * object color / roughness.
+  * object color / roughness (a tint on the texture for textured models).
 Instance masks come from Replicator's ``instance_id_segmentation`` annotator, so labels are
 exact and free. Uses the same scene, camera and assets as ``run_sorter.py``.
 """
@@ -43,10 +44,12 @@ import cv2
 import isaacsim.core.experimental.utils.stage as stage_utils
 import numpy as np
 import omni.replicator.core as rep
+from isaacsim.storage.native import get_assets_root_path
 from pxr import Gf, Usd, UsdGeom, UsdShade
 
 from sim.assets.library import describe, find_assets
-from sim.scene import CAMERA_PATH, build_scene
+from sim.assets.usd_utils import base_color_texture
+from sim.scene import CAMERA_PATH, CEILING_LIGHT_X, INDOOR_HDRIS, build_scene, hdri_path
 from trash_sorter import config
 from trash_sorter.yolo_format import draw_overlay, mask_to_label_line, parse_label_file, write_data_yaml
 
@@ -59,7 +62,8 @@ for split in ("train", "val"):
 
 assets = find_assets(args.assets)
 print("[datagen] assets:\n" + describe(assets))
-scene = build_scene(assets, per_class=4, with_robot=False)
+assets_root = get_assets_root_path()  # HDRIs; None offline (plain sky, other lights still vary)
+scene = build_scene(assets, per_class=4, with_robot=False, assets_root=assets_root)
 stage = stage_utils.get_current_stage()
 carb.settings.get_settings().set("rtx/post/dlss/execMode", 2)  # DLSS quality: fewer edge artifacts
 rep.orchestrator.set_capture_on_play(False)
@@ -81,15 +85,22 @@ for obj in objects:
     xform_ops[obj.path] = (ops[0], ops[1])  # translate, orient
 
 
-def object_shaders(obj) -> list[tuple[UsdShade.Shader, Gf.Vec3f, float]]:
-    """(shader, original color, original roughness) for every material inside an object."""
+def object_shaders(obj) -> list[tuple[UsdShade.Input, Gf.Vec3f, UsdShade.Input, float]]:
+    """(color input, original color, roughness input, original roughness) for every material in an object.
+
+    A textured material's color input is its texture's ``scale`` (a tint on the image).
+    """
     found = []
     for prim in Usd.PrimRange(stage.GetPrimAtPath(obj.path)):
         if prim.IsA(UsdShade.Shader):
             sh = UsdShade.Shader(prim)
             col, rough = sh.GetInput("diffuseColor"), sh.GetInput("roughness")
-            if col and rough:
-                found.append((sh, Gf.Vec3f(col.Get()), float(rough.Get())))
+            if not (col and rough):
+                continue
+            tex = base_color_texture(sh)
+            if tex is not None:
+                col = tex.GetInput("scale")
+            found.append((col, Gf.Vec3f(*list(col.Get())[:3]), rough, float(rough.Get())))
     return found
 
 
@@ -153,14 +164,36 @@ def place_objects() -> list:
     return chosen
 
 
+def randomize_lights() -> None:
+    """A random indoor room: HDRI ambient, 0-4 ceiling panels (one fixture type per frame), sometimes a window."""
+    lights = scene.lights
+    if assets_root:
+        lights.dome.GetTextureFileAttr().Set(hdri_path(assets_root, str(rng.choice(INDOOR_HDRIS))))
+    lights.dome.GetIntensityAttr().Set(float(rng.uniform(200, 800)))
+    UsdGeom.Xformable(lights.dome).GetOrderedXformOps()[0].Set(float(rng.uniform(0, 360)))
+    on = set(rng.choice(len(lights.ceiling), int(rng.integers(0, len(lights.ceiling) + 1)), replace=False).tolist())
+    kelvin = float(rng.uniform(2700, 6500))
+    height = config.BELT_TOP_Z + float(rng.uniform(1.6, 2.6))
+    for i, (rect, x) in enumerate(zip(lights.ceiling, CEILING_LIGHT_X, strict=True)):
+        rect.GetIntensityAttr().Set(float(rng.uniform(3000, 10000)) if i in on else 0.0)
+        rect.GetColorTemperatureAttr().Set(kelvin)
+        pos = Gf.Vec3d(x + rng.uniform(-0.15, 0.15), rng.uniform(-0.3, 0.3), height)
+        UsdGeom.Xformable(rect).GetOrderedXformOps()[0].Set(pos)
+    window = lights.window
+    if rng.random() < 0.3 or not on:  # never only the dim HDRI
+        window.GetIntensityAttr().Set(float(rng.uniform(300, 1200)))
+        window.GetAngleAttr().Set(float(rng.uniform(4, 15)))
+        window.GetColorTemperatureAttr().Set(float(rng.uniform(5000, 7000)))
+        tilt, azimuth = rng.uniform(35, 65), rng.uniform(0, 360)
+        UsdGeom.Xformable(window).GetOrderedXformOps()[0].Set(Gf.Vec3f(float(tilt), 0.0, float(azimuth)))
+    else:
+        window.GetIntensityAttr().Set(0.0)
+
+
 def randomize(chosen) -> None:
     if args.no_randomize:
         return
-    scene.dome_light.GetIntensityAttr().Set(float(rng.uniform(150, 900)))
-    scene.sun_light.GetIntensityAttr().Set(float(rng.uniform(400, 2000)))
-    scene.sun_light.GetColorTemperatureAttr().Set(float(rng.uniform(3200, 7500)))
-    rot = UsdGeom.Xformable(scene.sun_light).GetOrderedXformOps()[0]
-    rot.Set(Gf.Vec3f(float(rng.uniform(-45, 45)), float(rng.uniform(-45, 45)), float(rng.uniform(0, 360))))
+    randomize_lights()
     base = np.array(belt_colors[int(rng.integers(len(belt_colors)))])
     belt_rgb = np.clip(base * rng.uniform(0.7, 1.4), 0, 1)
     scene.belt_material.GetInput("diffuseColor").Set(Gf.Vec3f(*map(float, belt_rgb)))
@@ -177,11 +210,10 @@ def randomize(chosen) -> None:
         elif op.GetOpType() == UsdGeom.XformOp.TypeOrient:
             op.Set(Gf.Quatd(rot_q) if op.GetPrecision() == UsdGeom.XformOp.PrecisionDouble else Gf.Quatf(rot_q))
     for obj in chosen:
-        for sh, color, rough in shaders[obj.path]:
-            scale = rng.uniform(0.75, 1.25, 3)
-            new = np.clip(np.array(color) * scale, 0, 1)
-            sh.GetInput("diffuseColor").Set(Gf.Vec3f(*map(float, new)))
-            sh.GetInput("roughness").Set(float(np.clip(rough + rng.uniform(-0.1, 0.1), 0.02, 1.0)))
+        for col_in, color, rough_in, rough in shaders[obj.path]:
+            new = [float(c) for c in np.clip(np.array(color) * rng.uniform(0.75, 1.25, 3), 0, 1)]
+            col_in.Set(Gf.Vec4f(*new, 1.0) if col_in.GetTypeName() == "float4" else Gf.Vec3f(*new))
+            rough_in.Set(float(np.clip(rough + rng.uniform(-0.1, 0.1), 0.02, 1.0)))
 
 
 def id_to_path(info: dict) -> dict[int, str]:

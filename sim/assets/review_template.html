@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-Hant">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>模型挑選</title>
+<!-- Template for fetch_objaverse.py: __TARGET__ and __SECTIONS__ are filled in. -->
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; background: #f4f4f5; color: #18181b; }
+  header { position: sticky; top: 0; z-index: 1; background: #fff; border-bottom: 1px solid #ddd; padding: 10px 16px; }
+  header p { margin: 4px 0; font-size: 14px; }
+  code { background: #eee; padding: 1px 4px; border-radius: 3px; }
+  main { padding: 0 16px 40px; }
+  h2 { font-size: 18px; margin: 24px 0 8px; }
+  h2 button { margin-left: 8px; font-size: 12px; }
+  .count { font-weight: normal; font-size: 14px; color: #555; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+  .card { display: block; position: relative; background: #fff; border: 3px solid #e4e4e7; border-radius: 8px;
+          overflow: hidden; cursor: pointer; opacity: .55; }
+  .card:has(input:checked) { border-color: #16a34a; opacity: 1; }
+  .card input { position: absolute; top: 8px; left: 8px; width: 22px; height: 22px; accent-color: #16a34a; }
+  .thumb { display: block; width: 100%; height: 150px; object-fit: cover; background: #ddd; }
+  .dead { display: flex; align-items: center; justify-content: center; color: #888; font-size: 13px; }
+  .top { display: block; width: 100%; height: auto; background: #26262a; }
+  .meta { padding: 6px 8px; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+  .file { color: #999; }
+  #save { font-size: 15px; padding: 6px 14px; background: #16a34a; color: #fff; border: 0; border-radius: 6px; cursor: pointer; }
+</style>
+<header>
+  <p><b>勾選要保留的模型</b>（點卡片就能勾）。每類目標約 __TARGET__ 個。
+     上圖是 Sketchfab 縮圖，下圖是躺平後的俯視形狀（顏色只是粗略取樣；轉檔後模擬裡會有完整貼圖）。</p>
+  <p>勾完按 <button id="save" type="button">下載保留清單 keep.txt</button>，然後執行
+     <code>uv run --group assets python sim/assets/fetch_objaverse.py --apply-review 下載的keep.txt路徑</code>。
+     沒勾的會被刪掉；之後不加參數再跑一次，就會補新的候選，已勾的會保持勾選。</p>
+</header>
+<main>
+__SECTIONS__
+</main>
+<script>
+  function deadThumb(img) {
+    const div = document.createElement("div");
+    div.className = "thumb dead";
+    div.textContent = "Sketchfab 縮圖已失效，看下圖";
+    img.replaceWith(div);
+  }
+  const boxes = [...document.querySelectorAll("input[data-key]")];
+  const STORE = "objaverse-review";
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(STORE) || "{}"); } catch (e) {}
+  boxes.forEach(b => { if (b.dataset.key in saved) b.checked = saved[b.dataset.key]; });
+
+  function update() {
+    document.querySelectorAll("section").forEach(s => {
+      const bs = [...s.querySelectorAll("input[data-key]")];
+      s.querySelector(".count").textContent = `已勾 ${bs.filter(b => b.checked).length} / ${bs.length}`;
+    });
+    const state = {};
+    boxes.forEach(b => { state[b.dataset.key] = b.checked; });
+    try { localStorage.setItem(STORE, JSON.stringify(state)); } catch (e) {}
+  }
+  boxes.forEach(b => b.addEventListener("change", update));
+  document.querySelectorAll("section").forEach(s => {
+    const set = v => { s.querySelectorAll("input[data-key]").forEach(b => { b.checked = v; }); update(); };
+    s.querySelector(".all").onclick = () => set(true);
+    s.querySelector(".none").onclick = () => set(false);
+  });
+  document.getElementById("save").onclick = () => {
+    const keep = boxes.filter(b => b.checked).map(b => b.dataset.key).join("\n") + "\n";
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([keep], { type: "text/plain" }));
+    a.download = "keep.txt";
+    a.click();
+  };
+  update();
+</script>
+</html>
