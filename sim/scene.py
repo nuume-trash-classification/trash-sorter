@@ -27,6 +27,31 @@ OVERVIEW_CAMERA_PATH = "/World/OverviewCamera"
 BELT_PATH = "/World/Conveyor/Belt"
 PARK_Z = -2.0  # pooled objects wait below the floor
 
+# Lighting. HDRIs are on the Isaac Sim asset server (same root as the UR10).
+SKIES_DIR = "/NVIDIA/Assets/Skies"
+DEFAULT_HDRI = "Indoor/ZetoCG_com_WarehouseInterior2b.hdr"
+INDOOR_HDRIS = (
+    "Indoor/ZetoCG_com_WarehouseInterior2b.hdr",
+    "Indoor/ZetoCGcom_ExhibitionHall_Interior1.hdr",
+    "Indoor/autoshop_01_4k.hdr",
+    "Indoor/carpentry_shop_01_4k.hdr",
+    "Indoor/en_suite_4k.hdr",
+    "Indoor/entrance_hall_4k.hdr",
+    "Indoor/hospital_room_4k.hdr",
+    "Indoor/hotel_room_4k.hdr",
+    "Indoor/old_bus_depot_4k.hdr",
+    "Indoor/small_empty_house_4k.hdr",
+    "Indoor/studio_small_04_4k.hdr",
+    "Indoor/wooden_lounge_4k.hdr",
+    "Studio/photo_studio_01_4k.hdr",
+    "Studio/studio_small_05_4k.hdr",
+    "Studio/studio_small_07_4k.hdr",
+)
+DOME_INTENSITY = 600.0
+CEILING_LIGHT_X = (-1.2, -0.4, 0.4, 1.2)
+CEILING_HEIGHT = 2.0  # above the belt
+CEILING_INTENSITY = 8000.0
+
 
 @dataclass
 class PoolObject:
@@ -43,12 +68,18 @@ class PoolObject:
 
 
 @dataclass
+class Lights:
+    dome: UsdLux.DomeLight
+    ceiling: list[UsdLux.RectLight]
+    window: UsdLux.DistantLight
+
+
+@dataclass
 class Scene:
     objects: list[PoolObject]
     camera: RtxCamera
     belt_material: UsdShade.Shader
-    dome_light: UsdLux.DomeLight
-    sun_light: UsdLux.DistantLight
+    lights: Lights
     regions: dict[str, tuple[tuple[float, float], tuple[float, float]]] = field(default_factory=dict)
 
 
@@ -146,17 +177,43 @@ def _world_and_physics() -> None:
     physx_scene.CreateEnableCCDAttr().Set(True)
 
 
-def _lights() -> tuple[UsdLux.DomeLight, UsdLux.DistantLight]:
+def hdri_path(assets_root: str | None, name: str) -> str | None:
+    return f"{assets_root}{SKIES_DIR}/{name}" if assets_root else None
+
+
+def _color_temp(light: UsdLux.LightAPI, kelvin: float) -> None:
+    light.CreateEnableColorTemperatureAttr(True)
+    light.CreateColorTemperatureAttr(kelvin)
+
+
+def _lights(assets_root: str | None) -> Lights:
+    """Indoor light: an HDRI room (soft ambient + reflections), fluorescent panels over the belt,
+    and an optional low window light (off by default; ``datagen.py`` randomizes all of them).
+    Without the asset server the dome falls back to a plain grey sky.
+    """
     stage = _stage()
     dome = UsdLux.DomeLight.Define(stage, "/World/Lights/Dome")
-    dome.CreateIntensityAttr(400.0)
-    sun = UsdLux.DistantLight.Define(stage, "/World/Lights/Sun")
-    sun.CreateIntensityAttr(1500.0)
-    sun.CreateAngleAttr(1.0)
-    sun.CreateColorTemperatureAttr(5500.0)
-    sun.CreateEnableColorTemperatureAttr(True)
-    UsdGeom.Xformable(sun).AddRotateXYZOp().Set(Gf.Vec3f(25, 15, 0))
-    return dome, sun
+    dome.CreateIntensityAttr(DOME_INTENSITY)
+    texture = hdri_path(assets_root, DEFAULT_HDRI)
+    if texture:
+        dome.CreateTextureFileAttr(texture)
+        dome.CreateTextureFormatAttr(UsdLux.Tokens.latlong)
+    UsdGeom.Xformable(dome).AddRotateZOp().Set(0.0)
+    ceiling = []
+    for i, x in enumerate(CEILING_LIGHT_X):
+        rect = UsdLux.RectLight.Define(stage, f"/World/Lights/Ceiling{i}")
+        rect.CreateWidthAttr(1.2)  # a long fluorescent panel, emitting downwards (-Z)
+        rect.CreateHeightAttr(0.2)
+        rect.CreateIntensityAttr(CEILING_INTENSITY)
+        _color_temp(rect, 4500.0)
+        UsdGeom.Xformable(rect).AddTranslateOp().Set(Gf.Vec3d(x, 0.0, config.BELT_TOP_Z + CEILING_HEIGHT))
+        ceiling.append(rect)
+    window = UsdLux.DistantLight.Define(stage, "/World/Lights/Window")
+    window.CreateIntensityAttr(0.0)
+    window.CreateAngleAttr(10.0)  # large apparent source: soft shadow edges
+    _color_temp(window, 6000.0)
+    UsdGeom.Xformable(window).AddRotateXYZOp().Set(Gf.Vec3f(55, 0, 30))
+    return Lights(dome, ceiling, window)
 
 
 def _conveyor() -> UsdShade.Shader:
@@ -254,6 +311,13 @@ def _robot(assets_root: str) -> None:
     grip.GetAttribute("isaac:maxGripDistance").Set(0.03)
     grip.GetAttribute("isaac:coaxialForceLimit").Set(200.0)
     grip.GetAttribute("isaac:shearForceLimit").Set(200.0)
+    # Keep trying to attach for a while after "close": right after a fast move the real tip can still
+    # be settling a few mm above the object, and a single attempt then fails (~10% of picks at 2.5 s
+    # spacing). Shorter than PickParams.grip_timeout.
+    retry = grip.GetAttribute("isaac:retryInterval")  # not authored in the asset
+    if not retry:
+        retry = grip.CreateAttribute("isaac:retryInterval", Sdf.ValueTypeNames.Float)
+    retry.Set(0.5)
 
 
 def _bins() -> dict[str, tuple[tuple[float, float], tuple[float, float]]]:
@@ -309,21 +373,21 @@ def build_scene(
     """Create the whole cell on a fresh stage."""
     _materials.clear()
     _world_and_physics()
-    dome, sun = _lights()
+    if assets_root is None:
+        from isaacsim.storage.native import get_assets_root_path
+
+        assets_root = get_assets_root_path()
+    lights = _lights(assets_root)
     box("/World/Floor", (0, 0, -0.05), (20, 20, 0.1), (0.35, 0.36, 0.38))
     belt_shader = _conveyor()
     camera = _camera()
     if with_robot:
-        if assets_root is None:
-            from isaacsim.storage.native import get_assets_root_path
-
-            assets_root = get_assets_root_path()
         if not assets_root:
             raise RuntimeError("Isaac Sim assets root not found (needs internet or a local asset mirror)")
         _robot(assets_root)
     regions = _bins()
     objects = _object_pool(assets, per_class)
-    return Scene(objects, camera, belt_shader, dome, sun, regions)
+    return Scene(objects, camera, belt_shader, lights, regions)
 
 
 def look_at_quat(eye, target) -> list[float]:

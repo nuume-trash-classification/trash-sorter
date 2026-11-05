@@ -9,7 +9,8 @@ Asset contract (every object USD, placeholder or real, must follow it):
   The scene adds the rigid body itself.
 * ``customData``: ``trash_class`` (one of ``config.CLASS_NAMES``) and ``thickness`` (m).
 * Materials are ``UsdPreviewSurface``; a real model may drive diffuseColor with its texture
-  (``add_base_color_texture``, image file next to the USD).
+  (``add_base_color_texture``, image file next to the USD). See-through bottle parts use
+  ``glass_material`` (OmniGlass MDL), bound per part with a ``materialBind`` GeomSubset.
 """
 
 from __future__ import annotations
@@ -72,6 +73,36 @@ def add_base_color_texture(stage: Usd.Stage, material_path: str, texture: str) -
     tex.CreateInput("scale", Sdf.ValueTypeNames.Float4).Set(Gf.Vec4f(1, 1, 1, 1))
     surface = UsdShade.Shader.Get(stage, material_path + "/Shader")
     surface.GetInput("diffuseColor").ConnectToSource(tex.ConnectableAPI(), "rgb")
+
+
+def glass_material(
+    stage: Usd.Stage,
+    path: str,
+    tint: tuple[float, float, float],
+    ior: float = 1.5,
+    texture: str | None = None,
+) -> UsdShade.Material:
+    """See-through glass / PET (RTX ``OmniGlass``; ``UsdPreviewSurface`` opacity renders opaque in RTX).
+
+    Thin-walled: a bottle is a thin shell, and downloaded meshes are often not closed volumes.
+    ``texture`` (path relative to the layer) tints the glass per texel instead of ``tint``.
+    """
+    mat = UsdShade.Material.Define(stage, path)
+    sh = UsdShade.Shader.Define(stage, path + "/Shader")
+    sh.CreateImplementationSourceAttr(UsdShade.Tokens.sourceAsset)
+    sh.SetSourceAsset(Sdf.AssetPath("OmniGlass.mdl"), "mdl")
+    sh.SetSourceAssetSubIdentifier("OmniGlass", "mdl")
+    sh.CreateInput("glass_color", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*tint))
+    sh.CreateInput("glass_ior", Sdf.ValueTypeNames.Float).Set(ior)
+    sh.CreateInput("thin_walled", Sdf.ValueTypeNames.Bool).Set(True)
+    if texture is not None:
+        sh.CreateInput("use_glass_color_texture", Sdf.ValueTypeNames.Bool).Set(True)
+        sh.CreateInput("glass_color_texture", Sdf.ValueTypeNames.Asset).Set(texture)
+    out = sh.CreateOutput("out", Sdf.ValueTypeNames.Token)
+    mat.CreateSurfaceOutput("mdl").ConnectToSource(out)
+    mat.CreateVolumeOutput("mdl").ConnectToSource(out)
+    mat.CreateDisplacementOutput("mdl").ConnectToSource(out)
+    return mat
 
 
 def base_color_texture(surface: UsdShade.Shader) -> UsdShade.Shader | None:
