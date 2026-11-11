@@ -105,6 +105,22 @@ def object_shaders(obj) -> list[tuple[UsdShade.Input, Gf.Vec3f, UsdShade.Input, 
 
 
 shaders = {obj.path: object_shaders(obj) for obj in objects}
+
+
+def shadowless_primvars(obj) -> list[UsdGeom.Primvar]:
+    """``doNotCastShadows`` primvars set on an object's meshes (the see-through parts of real bottles)."""
+    found = []
+    for prim in Usd.PrimRange(stage.GetPrimAtPath(obj.path)):
+        pv = UsdGeom.PrimvarsAPI(prim).GetPrimvar("doNotCastShadows")
+        if pv and pv.Get():
+            found.append(pv)
+    return found
+
+
+# RTX leaves a mesh that casts no shadow out of the segmentation buffers, so a see-through
+# bottle would be labeled by its opaque label / cap only, or not at all. The mask comes from
+# a second render where those meshes cast shadows; the saved image is the first render.
+shadowless = {obj.path: shadowless_primvars(obj) for obj in objects}
 cam_xf = UsdGeom.Xformable(stage.GetPrimAtPath(CAMERA_PATH))
 cam_ops = cam_xf.GetOrderedXformOps()
 cam_pos0 = Gf.Vec3d(config.CAMERA_X, 0.0, config.BELT_TOP_Z + config.CAMERA_HEIGHT)
@@ -228,6 +244,7 @@ def id_to_path(info: dict) -> dict[int, str]:
 # ---------------------------------------------------------------------------
 n_val = max(1, int(round(args.frames * args.val_fraction)))
 stats = {c: 0 for c in config.CLASS_NAMES}
+placed = {c: 0 for c in config.CLASS_NAMES}  # objects put on the belt; a few are cut off by the image edge
 for _ in range(3):  # warm-up: let materials load
     rep.orchestrator.step(rt_subframes=args.rt_subframes, delta_time=0.0)
 
@@ -235,13 +252,21 @@ for i in range(args.frames):
     chosen = place_objects()
     randomize(chosen)
     rep.orchestrator.step(rt_subframes=args.rt_subframes, delta_time=0.0)
-    rgb = rgb_annot.get_data()
+    rgb = np.asarray(rgb_annot.get_data())[..., :3].copy()
+    see_through = [pv for obj in chosen for pv in shadowless[obj.path]]
+    if see_through:
+        for pv in see_through:
+            pv.Set(False)
+        rep.orchestrator.step(rt_subframes=1, delta_time=0.0)
     seg = seg_annot.get_data()
+    for pv in see_through:
+        pv.Set(True)
     seg_ids, mapping = np.asarray(seg["data"]), id_to_path(seg["info"])
     if seg_ids.ndim == 3:
         seg_ids = seg_ids[..., 0]
     lines = []
     for obj in chosen:
+        placed[obj.class_name] += 1
         ids = [k for k, path in mapping.items() if path == obj.path or path.startswith(obj.path + "/")]
         mask = np.isin(seg_ids, ids)
         line = mask_to_label_line(config.CLASS_IDS[obj.class_name], mask, min_area_px=60)
@@ -250,19 +275,20 @@ for i in range(args.frames):
             stats[obj.class_name] += 1
     split = "val" if i < n_val else "train"
     stem = f"{args.name}_{i:05d}"
-    img_bgr = cv2.cvtColor(np.asarray(rgb)[..., :3], cv2.COLOR_RGB2BGR)
+    img_bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
     cv2.imwrite(str(out / "images" / split / f"{stem}.jpg"), img_bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
     label_path = out / "labels" / split / f"{stem}.txt"
     label_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
     if i < args.previews:
-        overlay = draw_overlay(np.asarray(rgb)[..., :3], parse_label_file(label_path))
+        overlay = draw_overlay(rgb, parse_label_file(label_path))
         cv2.imwrite(str(out / "preview" / f"{stem}.jpg"), cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
     if (i + 1) % 50 == 0:
         print(f"[datagen] {i + 1}/{args.frames} frames")
 
 rep.orchestrator.wait_until_complete()
 yaml_path = write_data_yaml(out)
-(out / "stats.json").write_text(json.dumps({"frames": args.frames, "instances": stats}, indent=2), encoding="utf-8")
-print(f"[datagen] done: {args.frames} frames, instances per class {stats}")
+summary = {"frames": args.frames, "instances": stats, "placed": placed}
+(out / "stats.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+print(f"[datagen] done: {args.frames} frames, instances per class {stats} of placed {placed}")
 print(f"[datagen] dataset: {yaml_path}")
 simulation_app.close()
