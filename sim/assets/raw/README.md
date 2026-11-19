@@ -10,6 +10,10 @@ sim/assets/raw/
   glass_bottle/
 ```
 
+- 自動下載：`uv run --group assets python sim/assets/fetch_objaverse.py`（Objaverse LVIS，每類 `--per-class 25` 個）。
+  它會寫好 `sizes.csv`（選讓厚度符合類別的長度）、`objaverse_sources.csv`（作者、授權、網址）和
+  `review.html`。**一定要有人在 `review.html` 勾選要留的模型**，下載 `keep.txt` 後跑
+  `--apply-review keep.txt` 刪掉沒勾的；重跑不會再下載已經看過的模型。
 - 這個資料夾裡的模型**不會進 git**（檔案大、授權各不同）。請放在團隊雲端硬碟同步。
 - 每個類別可以放一個 `sizes.csv`，寫實物最長邊（公尺，用尺量）：
 

@@ -20,6 +20,7 @@ outputs/
 sim/assets/usd/
 sim/assets/raw/*
 !sim/assets/raw/README.md
+!sim/assets/raw/objaverse_sources.csv
 
 # Local settings
 .env
