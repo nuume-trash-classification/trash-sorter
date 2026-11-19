@@ -45,12 +45,13 @@ import isaacsim.core.experimental.utils.stage as stage_utils
 import numpy as np
 import omni.replicator.core as rep
 from isaacsim.storage.native import get_assets_root_path
-from pxr import Gf, Usd, UsdGeom, UsdShade
+from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade
 
 from sim.assets.library import describe, find_assets
-from sim.assets.usd_utils import base_color_texture
+from sim.assets.usd_utils import add_base_color_texture, base_color_texture, bind, preview_material
 from sim.scene import CAMERA_PATH, CEILING_LIGHT_X, INDOOR_HDRIS, build_scene, hdri_path
 from trash_sorter import config
+from trash_sorter.belt_look import BELT_PATTERNS, TEXTURE_MEAN, belt_texture, sample_belt_color
 from trash_sorter.yolo_format import draw_overlay, mask_to_label_line, parse_label_file, write_data_yaml
 
 rng = np.random.default_rng(args.seed)
@@ -124,7 +125,52 @@ shadowless = {obj.path: shadowless_primvars(obj) for obj in objects}
 cam_xf = UsdGeom.Xformable(stage.GetPrimAtPath(CAMERA_PATH))
 cam_ops = cam_xf.GetOrderedXformOps()
 cam_pos0 = Gf.Vec3d(config.CAMERA_X, 0.0, config.BELT_TOP_Z + config.CAMERA_HEIGHT)
-belt_colors = [(0.04, 0.04, 0.045), (0.10, 0.10, 0.11), (0.03, 0.09, 0.05), (0.04, 0.05, 0.13), (0.18, 0.18, 0.18)]
+
+BELT_SKIN_PATH = "/World/Conveyor/BeltSkin"
+BELT_TEXTURES = 18  # patterns generated per run, 6 of each kind
+BELT_TILE_M = (0.15, 0.6)  # one texture repeat covers this much belt (range over the patterns)
+
+
+def build_belt_skins() -> tuple[UsdGeom.Imageable, list[tuple[UsdShade.Material, UsdShade.Shader, UsdShade.Shader]]]:
+    """A patterned sheet lying on the belt, and one (material, surface, texture) per generated pattern.
+
+    The belt itself is an untextured cube; the sheet sits half a millimeter above it and is shown
+    on the frames that get a pattern. It is render-only (no collision) and exists only in datagen.
+    """
+    tex_dir = _bootstrap.OUTPUT_DIR / "belt_textures" / args.name
+    tex_dir.mkdir(parents=True, exist_ok=True)
+    L, Wd, z = config.BELT_LENGTH, config.BELT_WIDTH, config.BELT_TOP_Z + 0.0005
+    skin = UsdGeom.Mesh.Define(stage, BELT_SKIN_PATH)
+    skin.CreatePointsAttr([(-L / 2, -Wd / 2, z), (L / 2, -Wd / 2, z), (L / 2, Wd / 2, z), (-L / 2, Wd / 2, z)])
+    skin.CreateFaceVertexCountsAttr([4])
+    skin.CreateFaceVertexIndicesAttr([0, 1, 2, 3])
+    skin.CreateNormalsAttr([(0, 0, 1)] * 4)
+    st = UsdGeom.PrimvarsAPI(skin).CreatePrimvar("st", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.varying)
+    st.Set([(0, 0), (L, 0), (L, Wd), (0, Wd)])  # UV in meters; each material scales it to its tile size
+    looks = []
+    for k in range(BELT_TEXTURES):
+        kind = BELT_PATTERNS[k % len(BELT_PATTERNS)]
+        file = tex_dir / f"{kind}_{k:02d}.png"
+        cv2.imwrite(str(file), belt_texture(kind, rng))
+        path = f"/World/Looks/BeltSkin{k:02d}"
+        mat = preview_material(stage, path, (1.0, 1.0, 1.0), roughness=0.8)
+        add_base_color_texture(stage, path, file.as_posix())
+        tex = base_color_texture(UsdShade.Shader.Get(stage, path + "/Shader"))
+        # UsdTransform2d between the UV reader and the texture sets how often the pattern repeats.
+        xf = UsdShade.Shader.Define(stage, path + "/Tile")
+        xf.CreateIdAttr("UsdTransform2d")
+        xf.CreateInput("in", Sdf.ValueTypeNames.Float2).ConnectToSource(
+            UsdShade.Shader.Get(stage, path + "/UV").ConnectableAPI(), "result"
+        )
+        tile = float(rng.uniform(*BELT_TILE_M))
+        xf.CreateInput("scale", Sdf.ValueTypeNames.Float2).Set(Gf.Vec2f(1 / tile, 1 / tile))
+        tex.GetInput("st").ConnectToSource(xf.ConnectableAPI(), "result")
+        looks.append((mat, UsdShade.Shader.Get(stage, path + "/Shader"), tex))
+    return UsdGeom.Imageable(skin), looks
+
+
+belt_skin, belt_looks = build_belt_skins()
+belt_skin.MakeInvisible()
 
 
 def set_pose(obj, pos, yaw: float) -> None:
@@ -210,10 +256,19 @@ def randomize(chosen) -> None:
     if args.no_randomize:
         return
     randomize_lights()
-    base = np.array(belt_colors[int(rng.integers(len(belt_colors)))])
-    belt_rgb = np.clip(base * rng.uniform(0.7, 1.4), 0, 1)
-    scene.belt_material.GetInput("diffuseColor").Set(Gf.Vec3f(*map(float, belt_rgb)))
-    scene.belt_material.GetInput("roughness").Set(float(rng.uniform(0.4, 0.95)))
+    # Belt: any color, plain on half of the frames and patterned on the other half.
+    belt_rgb = sample_belt_color(rng)
+    belt_rough = float(rng.uniform(0.4, 0.95))
+    scene.belt_material.GetInput("diffuseColor").Set(Gf.Vec3f(*belt_rgb))
+    scene.belt_material.GetInput("roughness").Set(belt_rough)
+    if rng.random() < 0.5:
+        belt_skin.MakeInvisible()
+    else:
+        mat, surface, tex = belt_looks[int(rng.integers(len(belt_looks)))]
+        tex.GetInput("scale").Set(Gf.Vec4f(*(c / TEXTURE_MEAN for c in belt_rgb), 1.0))
+        surface.GetInput("roughness").Set(belt_rough)
+        bind(belt_skin.GetPrim(), mat)
+        belt_skin.MakeVisible()
     # Camera: +-3 cm position, +-4 cm height, +-3 deg tilt around the calibrated pose.
     jitter = Gf.Vec3d(*rng.uniform(-0.03, 0.03, 2), rng.uniform(-0.04, 0.04))
     rx, ry, rz = rng.uniform(-3, 3), rng.uniform(-3, 3), rng.uniform(-3, 3)
