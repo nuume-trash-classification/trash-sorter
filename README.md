@@ -211,6 +211,15 @@ uv run python perception/live_demo.py --weights runs\segment\sim_only\weights\be
    會印出整體與各類別 mask mAP50（玻璃另外列），並對照成功標準。
 3. 模擬取物：`run_sorter.py --perception yolo`，目標取物成功率 ≥ 95%、記錄漏撿率。
 4. Webcam demo：`live_demo.py`（按 `s` 截圖，`--save demo.mp4` 錄影）。
+5. 手機拍照 demo：`uv run python perception/phone_demo.py --weights <best.pt>`，手機連和電腦同一個 Wi-Fi
+   （或電腦連手機熱點），用瀏覽器開腳本印出的網址，按「拍照辨識」。一次一張，手機不用裝東西。
+   連不上時先看 Windows 防火牆有沒有擋 Python。
+   不在同一個網路時加 `--public`：會開一條 Cloudflare 臨時通道（先裝 `winget install Cloudflare.cloudflared`），
+   印出一個任何網路都能開的 https 網址，網址裡帶存取碼。每次啟動網址都會變，照片會經過 Cloudflare。
+   每張照片都會連同模型的預測（YOLO-seg 標籤）存到 `data/real/feedback/<日期>/`，結果下方按「正確 / 錯誤」後
+   分到 `correct/`、`wrong/`，沒按的留在 `unreviewed/`；按 Ctrl+C 停止時會印出這次各有幾張。
+   `wrong/` 的照片修好標註後可以併入微調集，**不能放進測試集**（它們是專挑模型答錯的，拿來評分會失真）。
+   「正確」的比例是整張照片全對的比例，會受拍攝內容影響，不能取代 mAP50。不想存檔就加 `--no-save`。
 
 ## 成功標準
 
