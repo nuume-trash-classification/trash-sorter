@@ -216,6 +216,10 @@ uv run python perception/live_demo.py --weights runs\segment\sim_only\weights\be
    連不上時先看 Windows 防火牆有沒有擋 Python。
    不在同一個網路時加 `--public`：會開一條 Cloudflare 臨時通道（先裝 `winget install Cloudflare.cloudflared`），
    印出一個任何網路都能開的 https 網址，網址裡帶存取碼。每次啟動網址都會變，照片會經過 Cloudflare。
+   每張照片都會連同模型的預測（YOLO-seg 標籤）存到 `data/real/feedback/<日期>/`，結果下方按「正確 / 錯誤」後
+   分到 `correct/`、`wrong/`，沒按的留在 `unreviewed/`；按 Ctrl+C 停止時會印出這次各有幾張。
+   `wrong/` 的照片修好標註後可以併入微調集，**不能放進測試集**（它們是專挑模型答錯的，拿來評分會失真）。
+   「正確」的比例是整張照片全對的比例，會受拍攝內容影響，不能取代 mAP50。不想存檔就加 `--no-save`。
 
 ## 成功標準
 

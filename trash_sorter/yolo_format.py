@@ -36,7 +36,14 @@ def mask_to_label_line(class_id: int, mask: np.ndarray, min_area_px: float = 20.
     if not polys:
         return None
     h, w = mask.shape[:2]
-    poly = polys[0] / np.array([w, h])
+    return polygon_to_label_line(class_id, polys[0] / np.array([w, h]))
+
+
+def polygon_to_label_line(class_id: int, poly_norm: np.ndarray) -> str | None:
+    """YOLO-seg label line for a normalized (N, 2) polygon, or None if it has fewer than 3 points."""
+    poly = np.asarray(poly_norm, dtype=np.float64).reshape(-1, 2)
+    if len(poly) < 3:
+        return None
     coords = " ".join(f"{v:.6f}" for v in np.clip(poly, 0.0, 1.0).ravel())
     return f"{class_id} {coords}"
 
