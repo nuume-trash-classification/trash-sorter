@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 import pytest
 
-from perception.phone_demo import MAX_SIDE, MAX_UPLOAD_BYTES, analyze, make_handler, summarize
+from perception.phone_demo import MAX_SIDE, MAX_UPLOAD_BYTES, analyze, find_tunnel_url, make_handler, summarize
 
 
 class _Tensor:
@@ -133,3 +133,39 @@ def test_unknown_paths_are_404(server_url):
     with pytest.raises(urllib.error.HTTPError) as caught:
         urllib.request.urlopen(server_url + "/nope", timeout=10)
     assert caught.value.code == 404
+
+
+@pytest.fixture
+def locked_url():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(_one_can, access_key="s3cret"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{server.server_address[1]}"
+    server.shutdown()
+    server.server_close()
+
+
+def test_with_an_access_key_the_page_needs_it_in_the_address(locked_url):
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        urllib.request.urlopen(locked_url + "/", timeout=10)
+    assert caught.value.code == 403
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        urllib.request.urlopen(locked_url + "/?key=wrong", timeout=10)
+    assert caught.value.code == 403
+    with urllib.request.urlopen(locked_url + "/?key=s3cret", timeout=10) as response:
+        assert response.status == 200
+
+
+def test_with_an_access_key_a_photo_without_it_is_refused(locked_url):
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        _post(locked_url + "/predict", _jpeg())
+    assert caught.value.code == 403
+    with _post(locked_url + "/predict?key=s3cret", _jpeg()) as response:
+        assert json.loads(response.read())["detections"]
+
+
+def test_tunnel_address_is_found_in_cloudflared_output():
+    line = "2026-11-26T10:00:00Z INF |  https://quiet-river-12ab.trycloudflare.com          |"
+    assert find_tunnel_url(line) == "https://quiet-river-12ab.trycloudflare.com"
+    assert find_tunnel_url("INF Requesting new quick Tunnel on trycloudflare.com...") is None
+    assert find_tunnel_url("see https://developers.cloudflare.com/cloudflare-one/") is None

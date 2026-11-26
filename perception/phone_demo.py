@@ -4,7 +4,15 @@
 
 Put the phone on the same Wi-Fi as the PC (or let the PC join the phone's hotspot) and open one
 of the addresses the script prints. The page uploads one photo at a time; nothing is installed
-on the phone. There is no login: run it only on a network you trust, and stop it with Ctrl+C.
+on the phone. Stop it with Ctrl+C.
+
+    uv run python perception/phone_demo.py --weights best.pt --public
+
+``--public`` also opens a Cloudflare quick tunnel (needs ``cloudflared`` on the PATH:
+``winget install Cloudflare.cloudflared``), so a phone on any network can reach the PC through
+an https address. The address changes on every start and the photos pass through Cloudflare.
+A public server always asks for an access key, which is part of the address the script prints;
+on the local network there is no key unless ``--key`` is given.
 
 A live camera stream would need HTTPS (browsers only give a page the camera over a secure
 connection), so this takes still photos through the phone's own camera app instead.
@@ -15,8 +23,13 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+import hmac
 import json
+import re
+import secrets
+import shutil
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -24,6 +37,7 @@ from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -87,7 +101,7 @@ document.getElementById("photo").addEventListener("change", async event => {
   if (!file) return;
   say("辨識中…");
   try {
-    const response = await fetch("/predict", {method: "POST", headers: {"Content-Type": "image/jpeg"},
+    const response = await fetch("/predict" + location.search, {method: "POST", headers: {"Content-Type": "image/jpeg"},
                                               body: await shrink(file)});
     const reply = await response.json();
     if (!response.ok) throw new Error(reply.error);
@@ -134,8 +148,11 @@ def analyze(image_bytes: bytes, predict: Predict) -> tuple[bytes, list[dict[str,
     return encoded.tobytes(), summarize(result)
 
 
-def make_handler(predict: Predict) -> type[BaseHTTPRequestHandler]:
-    """Request handler serving the page at ``/`` and the model at ``POST /predict``."""
+def make_handler(predict: Predict, access_key: str | None = None) -> type[BaseHTTPRequestHandler]:
+    """Request handler serving the page at ``/`` and the model at ``POST /predict``.
+
+    With ``access_key``, every request must carry it as ``?key=...`` or gets a 403.
+    """
     lock = threading.Lock()  # one inference at a time: the model is not thread-safe
 
     class Handler(BaseHTTPRequestHandler):
@@ -150,13 +167,27 @@ def make_handler(predict: Predict) -> type[BaseHTTPRequestHandler]:
         def _json(self, status: int, payload: dict[str, Any]) -> None:
             self._send(status, "application/json", json.dumps(payload).encode("utf-8"))
 
+        def _allowed(self) -> bool:
+            if access_key is None:
+                return True
+            given = parse_qs(urlsplit(self.path).query).get("key", [""])[0]
+            if hmac.compare_digest(given.encode("utf-8"), access_key.encode("utf-8")):
+                return True
+            self.close_connection = True  # a refused upload is left unread
+            self._json(403, {"error": "wrong or missing access key: open the full address, including ?key=..."})
+            return False
+
         def do_GET(self) -> None:
+            if not self._allowed():
+                return
             if self.path.split("?")[0] == "/":
                 self._send(200, "text/html; charset=utf-8", PAGE.encode("utf-8"))
             else:
                 self._json(404, {"error": "not found"})
 
         def do_POST(self) -> None:
+            if not self._allowed():
+                return
             if self.path.split("?")[0] != "/predict":
                 self._json(404, {"error": "not found"})
                 return
@@ -201,6 +232,36 @@ def lan_addresses() -> list[str]:
     return sorted(a for a in found if not a.startswith("127."))
 
 
+def find_tunnel_url(line: str) -> str | None:
+    """The public address in a line of ``cloudflared`` output, if the line announces one."""
+    match = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", line)
+    return match.group(0) if match else None
+
+
+def open_tunnel(port: int, timeout: float = 40.0) -> tuple[subprocess.Popen, str]:
+    """Start a Cloudflare quick tunnel to this PC's ``port``. Returns (process, public address)."""
+    exe = shutil.which("cloudflared")
+    if exe is None:
+        sys.exit("--public needs cloudflared. Install it with:  winget install Cloudflare.cloudflared")
+    command = [exe, "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{port}"]
+    process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, encoding="utf-8")
+    found: list[str] = []
+
+    def watch() -> None:  # keeps draining the output so cloudflared never blocks on a full pipe
+        for line in process.stderr:
+            if not found and (url := find_tunnel_url(line)):
+                found.append(url)
+
+    threading.Thread(target=watch, daemon=True).start()
+    deadline = time.monotonic() + timeout
+    while not found and process.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.2)
+    if not found:
+        process.terminate()
+        sys.exit("cloudflared did not report a public address (no internet, or the service is busy). Try again.")
+    return process, found[0]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--weights", required=True)
@@ -208,6 +269,8 @@ def main() -> None:
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--host", default="0.0.0.0", help="127.0.0.1 = this PC only")
+    ap.add_argument("--public", action="store_true", help="reachable from any network (Cloudflare quick tunnel)")
+    ap.add_argument("--key", default=None, help="access key required in the address (random with --public)")
     args = ap.parse_args()
 
     from ultralytics import YOLO
@@ -218,10 +281,16 @@ def main() -> None:
         return model.predict(frame, conf=args.conf, imgsz=args.imgsz, verbose=False)[0]
 
     predict(np.zeros((480, 640, 3), np.uint8))  # load the model onto the GPU before the first photo
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(predict))
-    print("Open one of these on the phone (same Wi-Fi as this PC):")
+    key = args.key or (secrets.token_urlsafe(6) if args.public else None)
+    suffix = f"?key={key}" if key else ""
+    server = ThreadingHTTPServer((args.host, args.port), make_handler(predict, key))
+    tunnel = None
+    if args.public:
+        tunnel, public_url = open_tunnel(args.port)
+        print(f"From any network (address changes on every start):\n  {public_url}/{suffix}")
+    print("On the same Wi-Fi as this PC:")
     for address in lan_addresses() or ["<this PC's IP address>"]:
-        print(f"  http://{address}:{args.port}/")
+        print(f"  http://{address}:{args.port}/{suffix}")
     print("Ctrl+C to stop.")
     try:
         server.serve_forever()
@@ -229,6 +298,8 @@ def main() -> None:
         print("\nStopped.")
     finally:
         server.server_close()
+        if tunnel is not None:
+            tunnel.terminate()
 
 
 if __name__ == "__main__":

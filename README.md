@@ -213,7 +213,9 @@ uv run python perception/live_demo.py --weights runs\segment\sim_only\weights\be
 4. Webcam demo：`live_demo.py`（按 `s` 截圖，`--save demo.mp4` 錄影）。
 5. 手機拍照 demo：`uv run python perception/phone_demo.py --weights <best.pt>`，手機連和電腦同一個 Wi-Fi
    （或電腦連手機熱點），用瀏覽器開腳本印出的網址，按「拍照辨識」。一次一張，手機不用裝東西。
-   連不上時先看 Windows 防火牆有沒有擋 Python；沒有登入機制，只在信任的網路上開。
+   連不上時先看 Windows 防火牆有沒有擋 Python。
+   不在同一個網路時加 `--public`：會開一條 Cloudflare 臨時通道（先裝 `winget install Cloudflare.cloudflared`），
+   印出一個任何網路都能開的 https 網址，網址裡帶存取碼。每次啟動網址都會變，照片會經過 Cloudflare。
 
 ## 成功標準
 
