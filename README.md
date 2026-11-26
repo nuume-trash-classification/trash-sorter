@@ -211,6 +211,9 @@ uv run python perception/live_demo.py --weights runs\segment\sim_only\weights\be
    會印出整體與各類別 mask mAP50（玻璃另外列），並對照成功標準。
 3. 模擬取物：`run_sorter.py --perception yolo`，目標取物成功率 ≥ 95%、記錄漏撿率。
 4. Webcam demo：`live_demo.py`（按 `s` 截圖，`--save demo.mp4` 錄影）。
+5. 手機拍照 demo：`uv run python perception/phone_demo.py --weights <best.pt>`，手機連和電腦同一個 Wi-Fi
+   （或電腦連手機熱點），用瀏覽器開腳本印出的網址，按「拍照辨識」。一次一張，手機不用裝東西。
+   連不上時先看 Windows 防火牆有沒有擋 Python；沒有登入機制，只在信任的網路上開。
 
 ## 成功標準
 
