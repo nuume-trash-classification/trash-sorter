@@ -11,6 +11,14 @@ dependencies = [
 ]
 
 [dependency-groups]
+# Downloading 3D models (sim/assets/fetch_objaverse.py). Not installed by default:
+# `uv run --group assets python sim/assets/fetch_objaverse.py`.
+assets = [
+    "objaverse>=0.1.7",
+    "pillow>=13.0.0",
+    "scipy>=1.18.1",
+    "trimesh>=5.2.0",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
